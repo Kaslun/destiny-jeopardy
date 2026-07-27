@@ -1,0 +1,30 @@
+{
+  "name": "guardian-jeopardy",
+  "private": true,
+  "version": "0.2.0",
+  "scripts": {
+    "prebuild": "node build.mjs",
+    "predev": "node build.mjs",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p server",
+    "server:dev": "wrangler dev",
+    "server:deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "next": "^16.2.12",
+    "partyserver": "^0.5.8",
+    "partysocket": "^1.3.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260625.1",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.7.0",
+    "wrangler": "~4.105.0"
+  }
+}

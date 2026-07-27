@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "guardian-jeopardy-room",
+  "main": "server/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        // The binding name is what partysocket addresses as party
+        // "jeopardy-room" (the kebab-cased form). Keep them in step.
+        "name": "JeopardyRoom",
+        "class_name": "JeopardyRoom"
+      },
+      {
+        // Saved boards, one object per slug, served over /boards/:slug.
+        "name": "BoardStore",
+        "class_name": "BoardStore"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      // SQLite-backed: Cloudflare no longer allows new KV-backed namespaces.
+      "new_sqlite_classes": ["JeopardyRoom"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["BoardStore"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

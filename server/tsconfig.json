@@ -1,0 +1,18 @@
+{
+  // The Worker is type-checked separately from the Next app so that Cloudflare
+  // globals (DurableObjectNamespace, the Workers `crypto`, …) never leak into
+  // browser code and quietly mask a real DOM type error there.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "esModuleInterop": true
+  },
+  "include": ["./**/*.ts", "../shared/**/*.ts"]
+}

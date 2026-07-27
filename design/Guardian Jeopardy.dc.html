@@ -1,0 +1,1218 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  html, body { margin:0; background:#05070c; }
+  a { color:#f0c469; text-decoration:none; }
+  a:hover { color:#ffe0a0; }
+  @keyframes drain { from { width:100%; } to { width:0%; } }
+  @keyframes pulseGlow { 0%,100% { box-shadow:0 0 0 0 rgba(240,196,105,.35);} 50% { box-shadow:0 0 0 18px rgba(240,196,105,0);} }
+  @keyframes scan { from { transform:translateY(-100%);} to { transform:translateY(900%);} }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+  input, textarea { font-family:'Chakra Petch',sans-serif; color:#e8ecf4; background:#0d1219; border:1px solid #26303f; border-radius:0; outline:none; box-sizing:border-box; }
+  input:focus, textarea:focus { border-color:#f0c469; background:#11161f; }
+  textarea { display:block; resize:none; }
+  input::placeholder, textarea::placeholder { color:#485266; }
+  input[type=number]::-webkit-inner-spin-button { opacity:.4; }
+</style>
+</helmet>
+
+<div style="font-family:'Chakra Petch',sans-serif; background:#05070c; color:#e8ecf4; padding:80px 80px 160px; display:flex; flex-direction:column; gap:120px; min-height:100vh; width:max-content; min-width:100%; box-sizing:border-box;">
+
+  <div style="display:flex; align-items:flex-end; gap:28px; border-bottom:1px solid #232b3c; padding-bottom:24px;">
+    <div style="width:14px; height:52px; background:#f0c469; transform:skewX(-14deg);"></div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.32em; color:#8b95ab;">FIRETEAM TRIVIA SYSTEM // BUILD 0.9</div>
+      <div style="font-size:44px; font-weight:700; letter-spacing:.04em; line-height:1;">GUARDIAN JEOPARDY</div>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.2em; color:#5f6a80; text-align:right; line-height:1.9;">FOUR SURFACES<br>TV BOARD · HOST CONSOLE · HANDHELD · GAME EDITOR</div>
+  </div>
+
+  <!-- ============ 1. TV BOARD ============ -->
+  <section style="display:flex; flex-direction:column; gap:22px;">
+    <div style="display:flex; align-items:center; gap:16px;">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.28em; color:#f0c469; border:1px solid #4a3d1d; background:#171308; padding:7px 14px;">01 / TV BOARD</div>
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.14em; color:#5f6a80;">1920 × 1080 · cast to display · click any tile to open a clue</div>
+    </div>
+
+    <div style="position:relative; width:1920px; height:1080px; background:radial-gradient(120% 90% at 50% -20%, #17203a 0%, #0a0d16 55%, #06080e 100%); border:1px solid #232b3c; overflow:hidden;">
+
+      <div style="position:absolute; inset:0; background:repeating-linear-gradient(0deg, rgba(255,255,255,.018) 0px, rgba(255,255,255,.018) 1px, transparent 1px, transparent 3px); pointer-events:none;"></div>
+
+      <div style="position:relative; height:100%; display:flex; flex-direction:column; padding:32px 40px; gap:22px; box-sizing:border-box;">
+
+        <!-- TV header -->
+        <div style="display:flex; align-items:center; gap:24px; height:88px; flex:none;">
+          <div style="width:64px; height:64px; border:2px solid #f0c469; transform:rotate(45deg); display:flex; align-items:center; justify-content:center;">
+            <div style="width:22px; height:22px; background:#f0c469;"></div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:14px; letter-spacing:.34em; color:#8b95ab;">{{ subtitle }}</div>
+            <div style="font-size:40px; font-weight:700; letter-spacing:.06em; line-height:1;">{{ title }}</div>
+          </div>
+          <div style="flex:1;"></div>
+          <div style="display:flex; align-items:center; gap:12px; padding:12px 22px; background:#0e1420; border:1px solid #232b3c; clip-path:polygon(0 0,100% 0,100% 62%,94% 100%,0 100%);">
+            <div style="width:9px; height:9px; background:#7fd8f0; border-radius:50%; animation:blink 1.8s infinite;"></div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:15px; letter-spacing:.22em; color:#9fb0c8;">{{ playerCount }} GUARDIANS CONNECTED</div>
+            <div style="width:1px; height:22px; background:#232b3c;"></div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:15px; letter-spacing:.22em; color:#f0c469;">ROOM {{ roomCode }}</div>
+          </div>
+        </div>
+
+        <!-- Board -->
+        <div style="flex:1; display:grid; grid-template-columns:{{ boardCols }}; gap:10px; align-content:stretch;">
+          <sc-for list="{{ columns }}" as="col" hint-placeholder-count="6">
+            <div style="display:grid; grid-template-rows:86px repeat(5,1fr); gap:10px; min-height:0;">
+              <div style="background:linear-gradient(180deg,#131a28,#0c111b); border:1px solid #2a3244; border-top:2px solid #f0c469; display:flex; align-items:center; justify-content:center; padding:0 12px; text-align:center;">
+                <div style="font-size:21px; font-weight:600; letter-spacing:.13em; line-height:1.15; color:#e8ecf4; text-wrap:balance;">{{ col.name }}</div>
+              </div>
+              <sc-for list="{{ col.tiles }}" as="tile" hint-placeholder-count="5">
+                <sc-if value="{{ tile.live }}" hint-placeholder-val="{{ true }}">
+                  <div onClick="{{ tile.onClick }}" style="position:relative; cursor:pointer; background:linear-gradient(180deg,#1b2434,#10161f); border:1px solid #2f3a4f; clip-path:polygon(0 0,100% 0,100% 76%,90% 100%,0 100%); display:flex; align-items:center; justify-content:center; transition:background .15s, transform .15s;" style-hover="background:linear-gradient(180deg,#28344a,#161e2b); transform:translateY(-2px);">
+                    <div style="font-size:60px; font-weight:700; color:#f0c469; letter-spacing:.02em; text-shadow:0 0 26px rgba(240,196,105,.28);">{{ tile.value }}</div>
+                    <div style="position:absolute; top:10px; left:12px; width:6px; height:6px; background:#3d4a63;"></div>
+                  </div>
+                </sc-if>
+                <sc-if value="{{ tile.used }}" hint-placeholder-val="{{ false }}">
+                  <div style="position:relative; background:#0a0e16; border:1px solid #1a2130; clip-path:polygon(0 0,100% 0,100% 76%,90% 100%,0 100%); display:flex; align-items:center; justify-content:center;">
+                    <div style="width:26px; height:26px; border:1px solid #232b3c; transform:rotate(45deg);"></div>
+                  </div>
+                </sc-if>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+
+        <!-- Player rail -->
+        <div style="flex:none; height:128px; display:grid; grid-template-columns:{{ playerCols }}; gap:12px;">
+          <sc-for list="{{ players }}" as="p" hint-placeholder-count="4">
+            <div style="position:relative; background:linear-gradient(100deg,#111825,#0b0f18); border:1px solid #232b3c; border-left:4px solid {{ p.tint }}; display:flex; align-items:center; gap:18px; padding:0 22px; clip-path:polygon(0 0,100% 0,100% 74%,97% 100%,0 100%);">
+              <div style="width:44px; height:44px; border:1px solid {{ p.tint }}; transform:rotate(45deg); opacity:.55;"></div>
+              <div style="display:flex; flex-direction:column; gap:3px; min-width:0;">
+                <div style="font-size:23px; font-weight:600; letter-spacing:.06em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ p.name }}</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.2em; color:#7d879c;">{{ p.cls }}</div>
+              </div>
+              <div style="flex:1;"></div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:38px; font-weight:600; color:{{ p.scoreColor }}; flex:none;">{{ p.scoreText }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- CLUE OVERLAY -->
+      <sc-if value="{{ openFlag }}" hint-placeholder-val="{{ true }}">
+        <div style="position:absolute; inset:0; background:linear-gradient(160deg,#0d1526 0%,#080b12 60%,#0b0910 100%); display:flex; flex-direction:column;">
+          <div style="position:absolute; inset:0; background:repeating-linear-gradient(0deg, rgba(255,255,255,.02) 0px, rgba(255,255,255,.02) 1px, transparent 1px, transparent 3px); pointer-events:none;"></div>
+
+          <div style="position:relative; flex:none; height:4px; background:#1a2130;">
+            <div style="height:100%; background:linear-gradient(90deg,#f0c469,#f0803c); animation:drain {{ timerSeconds }}s linear forwards;"></div>
+          </div>
+
+          <div style="position:relative; flex:none; display:flex; align-items:center; gap:20px; padding:26px 48px; border-bottom:1px solid #1c2434;">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:16px; letter-spacing:.3em; color:#f0c469;">{{ open.cat }}</div>
+            <div style="width:6px; height:6px; background:#3d4a63; transform:rotate(45deg);"></div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:16px; letter-spacing:.3em; color:#9fb0c8;">{{ open.value }} GLIMMER</div>
+            <sc-if value="{{ open.dd }}" hint-placeholder-val="{{ false }}">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:14px; letter-spacing:.28em; color:#0a0d14; background:#f0803c; padding:6px 14px;">DAILY DOUBLE</div>
+            </sc-if>
+            <div style="flex:1;"></div>
+            <div onClick="{{ closeClue }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:14px; letter-spacing:.24em; color:#7d879c; border:1px solid #2a3244; padding:9px 18px;" style-hover="color:#e8ecf4; border-color:#4a5670;">ESC · BACK TO BOARD</div>
+          </div>
+
+          <div style="position:relative; flex:1; display:grid; grid-template-columns:1fr 470px; min-height:0;">
+            <div style="display:flex; flex-direction:column; justify-content:center; gap:44px; padding:0 90px;">
+              <sc-if value="{{ open.hasMedia }}" hint-placeholder-val="{{ false }}">
+                <div style="position:relative; height:330px; background:repeating-linear-gradient(135deg,#141b28 0px,#141b28 10px,#101620 10px,#101620 20px); border:1px solid #2a3244; display:flex; align-items:center; justify-content:center; overflow:hidden;">
+                  <div style="position:absolute; left:0; right:0; height:2px; background:rgba(127,216,240,.18); animation:scan 4s linear infinite;"></div>
+                  <div style="font-family:'IBM Plex Mono',monospace; font-size:15px; letter-spacing:.26em; color:#6d7791;">{{ open.mediaLabel }}</div>
+                </div>
+              </sc-if>
+              <div style="font-size:66px; font-weight:500; line-height:1.24; letter-spacing:.01em; text-wrap:pretty; color:#f4f7fc;">{{ open.text }}</div>
+              <sc-if value="{{ revealed }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex; align-items:center; gap:20px; border-top:1px solid #2a3244; padding-top:30px;">
+                  <div style="font-family:'IBM Plex Mono',monospace; font-size:14px; letter-spacing:.28em; color:#8b95ab;">CORRECT RESPONSE</div>
+                  <div style="font-size:42px; font-weight:700; color:#f0c469;">{{ open.answer }}</div>
+                </div>
+              </sc-if>
+            </div>
+
+            <div style="border-left:1px solid #1c2434; background:rgba(6,9,16,.6); display:flex; flex-direction:column; padding:40px 40px 32px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.3em; color:#7d879c; margin-bottom:26px;">BUZZ ORDER</div>
+              <div style="display:flex; flex-direction:column; gap:12px;">
+                <sc-for list="{{ buzzes }}" as="b" hint-placeholder-count="3">
+                  <div style="display:flex; align-items:center; gap:18px; padding:16px 20px; background:{{ b.bg }}; border:1px solid {{ b.border }}; clip-path:polygon(0 0,100% 0,100% 70%,95% 100%,0 100%);">
+                    <div style="font-family:'IBM Plex Mono',monospace; font-size:26px; font-weight:600; color:{{ b.rankColor }}; width:34px;">{{ b.rank }}</div>
+                    <div style="font-size:26px; font-weight:600; letter-spacing:.04em; flex:1;">{{ b.name }}</div>
+                    <div style="font-family:'IBM Plex Mono',monospace; font-size:16px; color:#7d879c;">{{ b.delta }}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="flex:1;"></div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.18em; color:#4f596d; line-height:1.8;">{{ lockoutNote }}</div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </section>
+
+  <!-- ============ 2. HOST CONSOLE ============ -->
+  <section style="display:flex; flex-direction:column; gap:22px;">
+    <div style="display:flex; align-items:center; gap:16px;">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.28em; color:#7fd8f0; border:1px solid #1d3d4a; background:#08141a; padding:7px 14px;">02 / HOST CONSOLE</div>
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.14em; color:#5f6a80;">1520 × 960 · laptop or tablet · built for a host who has never run a game show</div>
+    </div>
+
+    <div style="width:1520px; height:960px; background:#0a0d15; border:1px solid #232b3c; display:grid; grid-template-columns:104px 1fr 400px; overflow:hidden;">
+
+      <!-- rail -->
+      <div style="background:#070a11; border-right:1px solid #1a2130; display:flex; flex-direction:column; align-items:center; padding:22px 0; gap:14px;">
+        <div style="width:40px; height:40px; border:2px solid #f0c469; transform:rotate(45deg); margin-bottom:14px;"></div>
+        <sc-for list="{{ railItems }}" as="r" hint-placeholder-count="4">
+          <div onClick="{{ r.onClick }}" style="cursor:pointer; width:72px; height:72px; background:{{ r.bg }}; border:1px solid {{ r.border }}; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px;">
+            <div style="width:18px; height:18px; border:2px solid {{ r.fg }}; transform:rotate(45deg);"></div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:9px; letter-spacing:.14em; color:{{ r.fg }};">{{ r.label }}</div>
+          </div>
+        </sc-for>
+      </div>
+
+      <!-- center -->
+      <div style="display:flex; flex-direction:column; min-width:0;">
+        <div style="flex:none; display:flex; align-items:center; gap:16px; padding:20px 28px; border-bottom:1px solid #1a2130;">
+          <div style="font-size:22px; font-weight:600; letter-spacing:.1em;">HOST CONSOLE</div>
+          <div style="width:1px; height:20px; background:#232b3c;"></div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.2em; color:#7d879c;">ROUND 1 · {{ tilesLeft }} CLUES LEFT</div>
+          <div style="flex:1;"></div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.2em; color:#f0c469; border:1px solid #4a3d1d; padding:6px 12px;">ROOM {{ roomCode }}</div>
+        </div>
+
+        <div style="flex:1; display:flex; flex-direction:column; gap:22px; padding:26px 28px; min-height:0; overflow:hidden;">
+
+          <sc-if value="{{ noClue }}" hint-placeholder-val="{{ false }}">
+            <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:26px; border:1px dashed #232b3c; background:#080b12;">
+              <div style="width:64px; height:64px; border:2px solid #2f3a4f; transform:rotate(45deg);"></div>
+              <div style="font-size:30px; font-weight:600; letter-spacing:.05em; color:#8b95ab;">PICK A TILE ON THE TV BOARD</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.2em; color:#4f596d; text-align:center; line-height:2;">THE CLUE, THE ANSWER AND THE BUZZ ORDER<br>WILL APPEAR HERE WHEN A CLUE IS LIVE</div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.2em; color:#f0c469; border:1px solid #4a3d1d; background:#171308; padding:10px 18px;">{{ tilesLeft }} CLUES REMAINING</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ openFlag }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex; flex-direction:column; gap:22px; flex:1; min-height:0;">
+          <div style="flex:none; background:linear-gradient(120deg,#101828,#0b1018); border:1px solid #2a3244; border-left:4px solid #f0c469; padding:24px 28px; display:flex; flex-direction:column; gap:16px;">
+            <div style="display:flex; align-items:center; gap:14px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.28em; color:#f0c469;">{{ open.cat }} · {{ open.value }}</div>
+              <sc-if value="{{ open.dd }}" hint-placeholder-val="{{ false }}">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.22em; color:#0a0d14; background:#f0803c; padding:4px 10px;">DAILY DOUBLE</div>
+              </sc-if>
+              <div style="flex:1;"></div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.2em; color:#7d879c;">READ THIS ALOUD</div>
+            </div>
+            <div style="font-size:31px; font-weight:500; line-height:1.35; text-wrap:pretty;">{{ open.text }}</div>
+            <div style="display:flex; align-items:center; gap:14px; border-top:1px dashed #2a3244; padding-top:16px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.22em; color:#8b95ab;">ANSWER</div>
+              <div style="font-size:24px; font-weight:700; color:#7fd8f0;">{{ open.answer }}</div>
+            </div>
+          </div>
+
+          <div style="flex:none; display:flex; flex-direction:column; gap:12px;">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.28em; color:#7d879c;">WHO BUZZED — RULE ON THE PLAYER AT THE TOP</div>
+            <sc-for list="{{ buzzes }}" as="b" hint-placeholder-count="3">
+              <div style="display:flex; align-items:center; gap:16px; padding:14px 18px; background:{{ b.bg }}; border:1px solid {{ b.border }};">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:20px; font-weight:600; color:{{ b.rankColor }}; width:28px;">{{ b.rank }}</div>
+                <div style="font-size:22px; font-weight:600; letter-spacing:.03em; width:190px;">{{ b.name }}</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; color:#7d879c; flex:1;">{{ b.delta }}</div>
+                <sc-if value="{{ b.active }}" hint-placeholder-val="{{ true }}">
+                  <div style="display:flex; gap:10px;">
+                    <div onClick="{{ markCorrect }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:15px; letter-spacing:.16em; font-weight:600; color:#0a0d14; background:#8fd98a; padding:12px 26px;" style-hover="background:#b0e9ac;">✓ CORRECT +{{ open.value }}</div>
+                    <div onClick="{{ markWrong }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:15px; letter-spacing:.16em; font-weight:600; color:#0a0d14; background:#f0803c; padding:12px 26px;" style-hover="background:#ff9a5c;">✕ WRONG −{{ open.value }}</div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="flex:1;"></div>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ openFlag }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:none; display:flex; gap:12px;">
+            <div onClick="{{ toggleReveal }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:14px; letter-spacing:.2em; color:#e8ecf4; background:#141b28; border:1px solid #2f3a4f; padding:20px;" style-hover="background:#1d2636;">{{ revealLabel }}</div>
+            <div onClick="{{ closeClue }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:14px; letter-spacing:.2em; color:#e8ecf4; background:#141b28; border:1px solid #2f3a4f; padding:20px;" style-hover="background:#1d2636;">↩ BACK TO BOARD</div>
+            <div onClick="{{ resetTimer }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:14px; letter-spacing:.2em; color:#0a0d14; background:#f0c469; padding:20px; font-weight:600;" style-hover="background:#ffdc94;">▶ RESTART {{ timerSeconds }}s TIMER</div>
+          </div>
+          </sc-if>
+        </div>
+      </div>
+
+      <!-- standings -->
+      <div style="border-left:1px solid #1a2130; background:#070a11; display:flex; flex-direction:column; min-height:0;">
+        <div style="flex:none; padding:20px 22px; border-bottom:1px solid #1a2130; display:flex; align-items:center; gap:12px;">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.28em; color:#7d879c;">STANDINGS</div>
+          <div style="flex:1;"></div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.18em; color:#4f596d;">TAP ± TO ADJUST</div>
+        </div>
+        <div style="flex:1; overflow:hidden; display:flex; flex-direction:column; gap:10px; padding:18px;">
+          <sc-for list="{{ players }}" as="p" hint-placeholder-count="4">
+            <div style="background:#0d1219; border:1px solid #1e2635; border-left:3px solid {{ p.tint }}; padding:16px 16px 14px; display:flex; flex-direction:column; gap:12px;">
+              <div style="display:flex; align-items:center; gap:12px;">
+                <div style="display:flex; flex-direction:column; gap:2px; min-width:0; flex:1;">
+                  <div style="font-size:20px; font-weight:600; letter-spacing:.04em; white-space:nowrap;">{{ p.name }}</div>
+                  <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.18em; color:#6b7488; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ p.cls }}</div>
+                </div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:26px; font-weight:600; color:{{ p.scoreColor }}; flex:none;">{{ p.scoreText }}</div>
+              </div>
+              <div style="display:flex; gap:8px;">
+                <div onClick="{{ p.minus }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:13px; color:#c9d2e2; background:#151c28; border:1px solid #26303f; padding:9px 0;" style-hover="background:#1f2836;">− 100</div>
+                <div onClick="{{ p.plus }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:13px; color:#c9d2e2; background:#151c28; border:1px solid #26303f; padding:9px 0;" style-hover="background:#1f2836;">+ 100</div>
+                <div onClick="{{ p.bonus }}" style="cursor:pointer; flex:1.4; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.1em; color:#f0c469; background:#1a1509; border:1px solid #4a3d1d; padding:9px 0;" style-hover="background:#241d0c;">★ BONUS 250</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="flex:none; border-top:1px solid #1a2130; padding:18px;">
+          <div onClick="{{ startFinal }}" style="cursor:pointer; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.24em; font-weight:600; color:#0a0d14; background:linear-gradient(100deg,#b18cf0,#7fd8f0); padding:18px;" style-hover="filter:brightness(1.12);">◆ BEGIN FINAL WAGER</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3. HANDHELD ============ -->
+  <section style="display:flex; flex-direction:column; gap:22px;">
+    <div style="display:flex; align-items:center; gap:16px;">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.28em; color:#b18cf0; border:1px solid #372b52; background:#120d1c; padding:7px 14px;">03 / HANDHELD BUZZER</div>
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.14em; color:#5f6a80;">390 × 844 · browser, no install · the middle screen's slam button is live</div>
+    </div>
+
+    <div style="display:flex; gap:56px; flex-wrap:wrap;">
+
+      <!-- JOIN -->
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div style="width:414px; height:868px; background:#000; border-radius:52px; padding:12px; box-sizing:border-box; box-shadow:0 0 0 1px #262e3d, 0 40px 80px rgba(0,0,0,.6);">
+          <div style="position:relative; width:100%; height:100%; border-radius:42px; overflow:hidden; background:radial-gradient(120% 70% at 50% 0%, #17203a, #07090f 70%); display:flex; flex-direction:column;">
+            <div style="flex:none; display:flex; align-items:center; justify-content:space-between; padding:16px 26px 6px; font-family:'IBM Plex Mono',monospace; font-size:13px; color:#9fb0c8;">
+              <div>9:41</div>
+              <div style="display:flex; gap:6px; align-items:center;"><div style="width:16px; height:9px; border:1px solid #9fb0c8; border-radius:2px;"></div></div>
+            </div>
+            <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:30px; padding:0 34px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.34em; color:#7d879c;">SCAN TO JOIN THE FIRETEAM</div>
+              <div style="position:relative; width:230px; height:230px; background:#e8ecf4; padding:16px; box-sizing:border-box;">
+                <div style="width:100%; height:100%; background:repeating-conic-gradient(#0a0d14 0% 25%, #e8ecf4 0% 50%) 0 0/16px 16px;"></div>
+                <div style="position:absolute; top:16px; left:16px; width:56px; height:56px; background:#e8ecf4; display:flex; align-items:center; justify-content:center;"><div style="width:44px; height:44px; border:9px solid #0a0d14;"></div></div>
+                <div style="position:absolute; top:16px; right:16px; width:56px; height:56px; background:#e8ecf4; display:flex; align-items:center; justify-content:center;"><div style="width:44px; height:44px; border:9px solid #0a0d14;"></div></div>
+                <div style="position:absolute; bottom:16px; left:16px; width:56px; height:56px; background:#e8ecf4; display:flex; align-items:center; justify-content:center;"><div style="width:44px; height:44px; border:9px solid #0a0d14;"></div></div>
+              </div>
+              <div style="display:flex; flex-direction:column; align-items:center; gap:8px;">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.3em; color:#7d879c;">OR ENTER ROOM CODE</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:46px; font-weight:600; letter-spacing:.16em; color:#f0c469;">{{ roomCode }}</div>
+              </div>
+              <div style="width:100%; border-top:1px solid #1c2434; padding-top:20px; display:flex; flex-direction:column; gap:10px;">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.24em; color:#5f6a80;">IN THE LOBBY · {{ playerCount }}</div>
+                <sc-for list="{{ players }}" as="p" hint-placeholder-count="4">
+                  <div style="display:flex; align-items:center; gap:12px;">
+                    <div style="width:8px; height:8px; background:{{ p.tint }}; transform:rotate(45deg);"></div>
+                    <div style="font-size:17px; font-weight:500; letter-spacing:.04em; color:#c9d2e2;">{{ p.name }}</div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="flex:none; height:34px; display:flex; align-items:center; justify-content:center;"><div style="width:130px; height:5px; background:#2a3244; border-radius:3px;"></div></div>
+          </div>
+        </div>
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.2em; color:#5f6a80; text-align:center;">JOIN</div>
+      </div>
+
+      <!-- BUZZER (live) -->
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div style="width:414px; height:868px; background:#000; border-radius:52px; padding:12px; box-sizing:border-box; box-shadow:0 0 0 1px #262e3d, 0 40px 80px rgba(0,0,0,.6);">
+          <div style="position:relative; width:100%; height:100%; border-radius:42px; overflow:hidden; background:{{ phoneBg }}; display:flex; flex-direction:column;">
+            <div style="flex:none; display:flex; align-items:center; justify-content:space-between; padding:16px 26px 6px; font-family:'IBM Plex Mono',monospace; font-size:13px; color:#9fb0c8;">
+              <div>9:41</div>
+              <div style="display:flex; gap:6px; align-items:center;"><div style="width:16px; height:9px; border:1px solid #9fb0c8; border-radius:2px;"></div></div>
+            </div>
+
+            <div style="flex:none; display:flex; align-items:center; gap:14px; padding:14px 26px 18px; border-bottom:1px solid rgba(255,255,255,.08);">
+              <div style="width:34px; height:34px; border:2px solid #7fd8f0; transform:rotate(45deg);"></div>
+              <div style="display:flex; flex-direction:column; gap:2px;">
+                <div style="font-size:19px; font-weight:600; letter-spacing:.05em;">{{ me.name }}</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.2em; color:#8b95ab;">{{ me.meta }}</div>
+              </div>
+              <div style="flex:1;"></div>
+              <div style="text-align:right;">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:9px; letter-spacing:.2em; color:#8b95ab;">GLIMMER</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:26px; font-weight:600; color:#f0c469;">{{ me.scoreText }}</div>
+              </div>
+            </div>
+
+            <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:34px; padding:0 30px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.3em; color:{{ phoneHintColor }}; text-align:center; line-height:2;">{{ phoneHint }}</div>
+              <div onClick="{{ toggleBuzz }}" style="cursor:pointer; width:280px; height:280px; border-radius:50%; background:{{ buzzBg }}; border:3px solid {{ buzzBorder }}; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; animation:pulseGlow 2.4s infinite; user-select:none;" style-active="transform:scale(.95);">
+                <div style="font-size:56px; font-weight:700; letter-spacing:.1em; color:{{ buzzFg }}; line-height:1;">{{ buzzLabel }}</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.26em; color:{{ buzzFg }}; opacity:.72;">{{ buzzSub }}</div>
+              </div>
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.22em; color:#7d879c;">{{ phoneStatus }}</div>
+            </div>
+
+            <div style="flex:none; padding:0 26px 26px; display:flex; gap:10px;">
+              <div style="flex:1; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.1); padding:14px; text-align:center;">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:9px; letter-spacing:.2em; color:#8b95ab;">STREAK</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; color:#e8ecf4;">3</div>
+              </div>
+              <div style="flex:1; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.1); padding:14px; text-align:center;">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:9px; letter-spacing:.2em; color:#8b95ab;">FASTEST</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; color:#e8ecf4;">0.41s</div>
+              </div>
+              <div style="flex:1; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.1); padding:14px; text-align:center;">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:9px; letter-spacing:.2em; color:#8b95ab;">CORRECT</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; color:#e8ecf4;">6/9</div>
+              </div>
+            </div>
+            <div style="flex:none; height:34px; display:flex; align-items:center; justify-content:center;"><div style="width:130px; height:5px; background:rgba(255,255,255,.22); border-radius:3px;"></div></div>
+          </div>
+        </div>
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.2em; color:#5f6a80; text-align:center;">BUZZER — TAP IT</div>
+      </div>
+
+      <!-- LOCKED OUT -->
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div style="width:414px; height:868px; background:#000; border-radius:52px; padding:12px; box-sizing:border-box; box-shadow:0 0 0 1px #262e3d, 0 40px 80px rgba(0,0,0,.6);">
+          <div style="position:relative; width:100%; height:100%; border-radius:42px; overflow:hidden; background:radial-gradient(90% 60% at 50% 40%, #3a2408, #17100a 70%); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:26px;">
+            <div style="position:absolute; inset:0; border:14px solid rgba(240,196,105,.5);"></div>
+            <div style="width:96px; height:96px; border:4px solid #f0c469; transform:rotate(45deg); display:flex; align-items:center; justify-content:center;">
+              <div style="font-size:44px; font-weight:700; color:#f0c469; transform:rotate(-45deg);">1</div>
+            </div>
+            <div style="font-size:60px; font-weight:700; letter-spacing:.04em; color:#ffe0a0; text-align:center; line-height:1.05;">YOU'RE<br>UP</div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.28em; color:#c9a860; text-align:center; line-height:2;">BUZZED IN 0.38s<br>EVERYONE ELSE IS QUEUED</div>
+            <div style="position:absolute; bottom:70px; left:0; right:0; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.24em; color:#8a7448;">ANSWER OUT LOUD</div>
+          </div>
+        </div>
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.2em; color:#5f6a80; text-align:center;">FIRST TO BUZZ</div>
+      </div>
+
+      <!-- WAGER -->
+      <div style="display:flex; flex-direction:column; gap:14px;">
+        <div style="width:414px; height:868px; background:#000; border-radius:52px; padding:12px; box-sizing:border-box; box-shadow:0 0 0 1px #262e3d, 0 40px 80px rgba(0,0,0,.6);">
+          <div style="position:relative; width:100%; height:100%; border-radius:42px; overflow:hidden; background:radial-gradient(110% 60% at 50% 10%, #1d1533, #08070f 70%); display:flex; flex-direction:column;">
+            <div style="flex:none; display:flex; align-items:center; justify-content:space-between; padding:16px 26px 6px; font-family:'IBM Plex Mono',monospace; font-size:13px; color:#9fb0c8;">
+              <div>9:41</div>
+              <div style="display:flex; gap:6px; align-items:center;"><div style="width:16px; height:9px; border:1px solid #9fb0c8; border-radius:2px;"></div></div>
+            </div>
+            <div style="flex:1; display:flex; flex-direction:column; justify-content:center; gap:28px; padding:0 32px;">
+              <div style="display:flex; flex-direction:column; gap:10px;">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.32em; color:#b18cf0;">FINAL WAGER</div>
+                <div style="font-size:38px; font-weight:700; letter-spacing:.03em; line-height:1.15;">HOW MUCH ARE YOU RISKING?</div>
+              </div>
+              <div style="background:rgba(255,255,255,.04); border:1px solid rgba(177,140,240,.32); padding:22px; display:flex; flex-direction:column; gap:6px;">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.24em; color:#8b95ab;">YOUR GLIMMER</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:42px; font-weight:600; color:#f0c469;">{{ me.scoreText }}</div>
+              </div>
+              <div style="border:2px solid #b18cf0; padding:20px 22px; display:flex; align-items:baseline; gap:10px; background:rgba(177,140,240,.08);">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:26px; color:#8b95ab;">◈</div>
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:52px; font-weight:600; color:#e8ecf4; letter-spacing:.04em;">1,800</div>
+                <div style="width:2px; height:44px; background:#b18cf0; animation:blink 1s infinite;"></div>
+              </div>
+              <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px;">
+                <div style="text-align:center; font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.1em; color:#c9d2e2; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); padding:16px 0;">HALF</div>
+                <div style="text-align:center; font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.1em; color:#c9d2e2; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.12); padding:16px 0;">CLEAR</div>
+                <div style="text-align:center; font-family:'IBM Plex Mono',monospace; font-size:13px; letter-spacing:.1em; color:#0a0d14; background:#b18cf0; padding:16px 0; font-weight:600;">ALL IN</div>
+              </div>
+              <div style="text-align:center; font-family:'IBM Plex Mono',monospace; font-size:14px; letter-spacing:.24em; font-weight:600; color:#0a0d14; background:#e8ecf4; padding:20px;">LOCK IT IN</div>
+            </div>
+            <div style="flex:none; height:34px; display:flex; align-items:center; justify-content:center;"><div style="width:130px; height:5px; background:rgba(255,255,255,.22); border-radius:3px;"></div></div>
+          </div>
+        </div>
+        <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.2em; color:#5f6a80; text-align:center;">FINAL WAGER</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4. GAME EDITOR ============ -->
+  <section style="display:flex; flex-direction:column; gap:22px;">
+    <div style="display:flex; align-items:center; gap:16px;">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.28em; color:#8fd98a; border:1px solid #26492a; background:#0a160b; padding:7px 14px;">04 / GAME EDITOR</div>
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.14em; color:#5f6a80;">1920 × 1180 · build your own board · everything typed here is live on the TV board above</div>
+    </div>
+
+    <div style="width:1920px; height:1180px; background:#0a0d15; border:1px solid #232b3c; display:grid; grid-template-columns:360px 1fr 440px; overflow:hidden;">
+
+      <!-- LEFT · GAME SETUP -->
+      <div style="background:#070a11; border-right:1px solid #1a2130; display:flex; flex-direction:column; min-height:0;">
+        <div style="flex:none; padding:20px 22px; border-bottom:1px solid #1a2130; display:flex; align-items:center; gap:12px;">
+          <div style="width:10px; height:10px; background:#8fd98a; transform:rotate(45deg);"></div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.28em; color:#7d879c;">GAME SETUP</div>
+        </div>
+
+        <div style="flex:1; min-height:0; overflow:auto; padding:20px 22px; display:flex; flex-direction:column; gap:26px;">
+
+          <div style="display:flex; flex-direction:column; gap:11px;">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.26em; color:#4f596d;">IDENTITY</div>
+            <div style="display:flex; flex-direction:column; gap:5px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.2em; color:#6b7488;">GAME TITLE</div>
+              <input value="{{ title }}" onChange="{{ setTitle }}" placeholder="GUARDIAN JEOPARDY" style="width:100%; padding:11px 12px; font-size:15px; font-weight:600; letter-spacing:.05em;">
+            </div>
+            <div style="display:flex; flex-direction:column; gap:5px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.2em; color:#6b7488;">ROUND LINE</div>
+              <input value="{{ subtitle }}" onChange="{{ setSubtitle }}" placeholder="SEASON OF THE ANSWER · ROUND 01" style="width:100%; padding:11px 12px; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.14em;">
+            </div>
+            <div style="display:flex; flex-direction:column; gap:5px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.2em; color:#6b7488;">ROOM CODE</div>
+              <input value="{{ roomCode }}" onChange="{{ setRoom }}" placeholder="VEX7" style="width:100%; padding:11px 12px; font-family:'IBM Plex Mono',monospace; font-size:18px; font-weight:600; letter-spacing:.2em; color:#f0c469;">
+            </div>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:11px;">
+            <div style="display:flex; align-items:center; gap:6px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.26em; color:#4f596d;">VALUE LADDER</div>
+              <div style="flex:1;"></div>
+              <div onClick="{{ halveValues }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.12em; color:#8b95ab; border:1px solid #26303f; padding:5px 9px;" style-hover="color:#e8ecf4; border-color:#4a5670;">÷2</div>
+              <div onClick="{{ doubleValues }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.12em; color:#8b95ab; border:1px solid #26303f; padding:5px 9px;" style-hover="color:#e8ecf4; border-color:#4a5670;">×2</div>
+              <div onClick="{{ resetValues }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.12em; color:#8b95ab; border:1px solid #26303f; padding:5px 9px;" style-hover="color:#e8ecf4; border-color:#4a5670;">RESET</div>
+            </div>
+            <sc-for list="{{ valueRows }}" as="vr" hint-placeholder-count="5">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; color:#6b7488; width:24px; flex:none;">{{ vr.label }}</div>
+                <input type="number" value="{{ vr.raw }}" onChange="{{ vr.onChange }}" style="flex:1; min-width:0; padding:9px 11px; font-family:'IBM Plex Mono',monospace; font-size:14px;">
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:11px;">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.26em; color:#4f596d;">PLAYERS · {{ playerCount }}</div>
+              <div style="flex:1;"></div>
+              <div onClick="{{ addPlayer }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.12em; color:{{ addPlayerColor }}; border:1px solid #26303f; padding:5px 9px;" style-hover="border-color:#4a5670;">+ ADD</div>
+            </div>
+            <sc-for list="{{ editorPlayers }}" as="ep" hint-placeholder-count="4">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <div style="width:9px; height:9px; background:{{ ep.tint }}; transform:rotate(45deg); flex:none;"></div>
+                <input value="{{ ep.name }}" onChange="{{ ep.onName }}" placeholder="NAME" style="flex:1; min-width:0; padding:9px 10px; font-size:14px; font-weight:600;">
+                <input value="{{ ep.cls }}" onChange="{{ ep.onCls }}" placeholder="CLASS" style="width:92px; flex:none; padding:9px 8px; font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.1em;">
+                <div onClick="{{ ep.onDelete }}" style="cursor:pointer; flex:none; width:28px; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:12px; color:{{ ep.delColor }}; border:1px solid #26303f; padding:9px 0;" style-hover="border-color:#4a5670;">✕</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:9px;">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.26em; color:#4f596d;">BOARD</div>
+            <div onClick="{{ resetPlayed }}" style="cursor:pointer; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; color:#c9d2e2; background:#141b28; border:1px solid #26303f; padding:12px;" style-hover="background:#1d2636;">↺ RESET PLAYED TILES</div>
+            <div onClick="{{ blankBoard }}" style="cursor:pointer; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; color:{{ blankColor }}; background:#141b28; border:1px solid {{ blankBorder }}; padding:12px;" style-hover="background:#1d2636;">{{ blankLabel }}</div>
+            <div onClick="{{ loadSample }}" style="cursor:pointer; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; color:{{ sampleColor }}; background:#141b28; border:1px solid {{ sampleBorder }}; padding:12px;" style-hover="background:#1d2636;">{{ sampleLabel }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- CENTER · BOARD GRID -->
+      <div style="display:flex; flex-direction:column; min-width:0; min-height:0;">
+        <div style="flex:none; display:flex; align-items:center; gap:16px; padding:20px 26px; border-bottom:1px solid #1a2130;">
+          <div style="font-size:22px; font-weight:600; letter-spacing:.1em;">GAME EDITOR</div>
+          <div style="width:1px; height:20px; background:#232b3c;"></div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.2em; color:#7d879c;">{{ readyCount }} / {{ totalClues }} CLUES READY</div>
+          <div style="width:200px; height:8px; background:#0f141d; border:1px solid #26303f; flex:none;">
+            <div style="height:100%; width:{{ readyPct }}%; background:linear-gradient(90deg,#8fd98a,#f0c469);"></div>
+          </div>
+          <div style="width:1px; height:20px; background:#232b3c;"></div>
+          <div style="display:flex; align-items:center; gap:9px;">
+            <div style="width:7px; height:7px; background:{{ saveColor }}; transform:rotate(45deg); flex:none;"></div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; color:{{ saveColor }};">{{ saveNote }}</div>
+          </div>
+          <div style="flex:1;"></div>
+          <div onClick="{{ addCat }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.18em; font-weight:600; color:#0a0d14; background:{{ addCatBg }}; padding:11px 18px;" style-hover="filter:brightness(1.12);">+ ADD CATEGORY</div>
+          <div onClick="{{ toggleIo }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.18em; color:#e8ecf4; background:#141b28; border:1px solid #2f3a4f; padding:11px 18px;" style-hover="background:#1d2636;">{{ ioToggleLabel }}</div>
+        </div>
+
+        <div style="flex:1; min-height:0; padding:22px 26px; display:grid; grid-template-columns:{{ editorCols }}; gap:9px;">
+          <sc-for list="{{ editorCats }}" as="ec" hint-placeholder-count="6">
+            <div style="display:grid; grid-template-rows:82px repeat(5,1fr); gap:8px; min-height:0; min-width:0;">
+              <div style="display:flex; flex-direction:column; gap:6px; min-width:0;">
+                <input value="{{ ec.name }}" onChange="{{ ec.onName }}" placeholder="CATEGORY" style="width:100%; padding:11px 8px; font-size:14px; font-weight:600; letter-spacing:.06em; text-align:center; border-top:2px solid #f0c469;">
+                <div style="display:flex; gap:5px;">
+                  <div onClick="{{ ec.onLeft }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8b95ab; background:#0f141d; border:1px solid #222b3a; padding:5px 0;" style-hover="color:#e8ecf4; border-color:#4a5670;">◀</div>
+                  <div onClick="{{ ec.onRight }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:11px; color:#8b95ab; background:#0f141d; border:1px solid #222b3a; padding:5px 0;" style-hover="color:#e8ecf4; border-color:#4a5670;">▶</div>
+                  <div onClick="{{ ec.onDelete }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:11px; color:{{ ec.delColor }}; background:#0f141d; border:1px solid #222b3a; padding:5px 0;" style-hover="border-color:#4a5670;">✕</div>
+                </div>
+              </div>
+              <sc-for list="{{ ec.cells }}" as="cell" hint-placeholder-count="5">
+                <div onClick="{{ cell.onClick }}" style="cursor:pointer; min-height:0; overflow:hidden; background:{{ cell.bg }}; border:1px solid {{ cell.border }}; clip-path:polygon(0 0,100% 0,100% 84%,93% 100%,0 100%); padding:10px 11px; display:flex; flex-direction:column; gap:7px;" style-hover="border-color:#4a5670;">
+                  <div style="display:flex; align-items:center; gap:6px; flex:none;">
+                    <div style="font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:600; color:{{ cell.valColor }};">{{ cell.value }}</div>
+                    <div style="flex:1;"></div>
+                    <sc-if value="{{ cell.dd }}" hint-placeholder-val="{{ false }}">
+                      <div style="font-family:'IBM Plex Mono',monospace; font-size:8px; letter-spacing:.12em; color:#0a0d14; background:#f0803c; padding:2px 5px;">DD</div>
+                    </sc-if>
+                    <sc-if value="{{ cell.hasMedia }}" hint-placeholder-val="{{ false }}">
+                      <div style="font-family:'IBM Plex Mono',monospace; font-size:8px; letter-spacing:.12em; color:#7fd8f0; border:1px solid #1d3d4a; padding:2px 5px;">{{ cell.mediaTag }}</div>
+                    </sc-if>
+                    <div style="width:7px; height:7px; background:{{ cell.dot }}; transform:rotate(45deg); flex:none;"></div>
+                  </div>
+                  <div style="font-size:12px; line-height:1.45; color:{{ cell.textColor }}; overflow:hidden;">{{ cell.preview }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+
+        <sc-if value="{{ ioOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:none; border-top:1px solid #1a2130; background:#070a11; padding:18px 26px 20px; display:flex; flex-direction:column; gap:11px;">
+            <div style="display:flex; align-items:center; gap:12px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.26em; color:#7d879c;">SAVE / LOAD A GAME</div>
+              <div style="flex:1;"></div>
+              <div onClick="{{ doExport }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; color:#e8ecf4; background:#141b28; border:1px solid #2f3a4f; padding:10px 16px;" style-hover="background:#1d2636;">↑ EXPORT CURRENT GAME</div>
+              <div onClick="{{ doImport }}" style="cursor:pointer; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; font-weight:600; color:#0a0d14; background:#8fd98a; padding:10px 16px;" style-hover="background:#b0e9ac;">↓ LOAD FROM JSON</div>
+            </div>
+            <textarea value="{{ ioText }}" onChange="{{ setIoText }}" placeholder='Paste a saved game here, then hit LOAD. Shape: { "title": "MY GAME", "values": [ 200, 400, 600, 800, 1000 ], "categories": [ { "name": "MY CATEGORY", "clues": [ { "t": "the clue", "a": "the answer", "dd": true } ] } ] }' style="width:100%; height:150px; padding:14px; font-family:'IBM Plex Mono',monospace; font-size:12px; line-height:1.7;"></textarea>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.14em; color:{{ ioMsgColor }};">{{ ioMsg }}</div>
+          </div>
+        </sc-if>
+      </div>
+
+      <!-- RIGHT · CLUE INSPECTOR -->
+      <div style="border-left:1px solid #1a2130; background:#070a11; display:flex; flex-direction:column; min-height:0;">
+        <div style="flex:none; padding:20px 22px; border-bottom:1px solid #1a2130; display:flex; flex-direction:column; gap:7px;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.26em; color:#f0c469; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ insp.cat }}</div>
+            <div style="width:5px; height:5px; background:#3d4a63; transform:rotate(45deg); flex:none;"></div>
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.26em; color:#9fb0c8; flex:none;">{{ insp.value }}</div>
+          </div>
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.2em; color:#4f596d;">{{ insp.coord }}</div>
+        </div>
+
+        <div style="flex:1; min-height:0; overflow:auto; padding:20px 22px; display:flex; flex-direction:column; gap:22px;">
+          <div style="display:flex; flex-direction:column; gap:7px;">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.24em; color:#6b7488;">CLUE · THE HOST READS THIS ALOUD</div>
+            <textarea value="{{ insp.t }}" onChange="{{ setClueText }}" placeholder="Write the clue exactly as it should be read out." style="width:100%; height:172px; padding:13px; font-size:16px; line-height:1.5;"></textarea>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:7px;">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.24em; color:#6b7488;">CORRECT RESPONSE</div>
+            <input value="{{ insp.a }}" onChange="{{ setClueAnswer }}" placeholder="Who is …?" style="width:100%; padding:13px; font-size:17px; font-weight:600; color:#7fd8f0;">
+          </div>
+
+          <div onClick="{{ toggleDD }}" style="cursor:pointer; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.2em; font-weight:600; color:{{ insp.ddFg }}; background:{{ insp.ddBg }}; border:1px solid {{ insp.ddBorder }}; padding:14px;" style-hover="filter:brightness(1.15);">{{ insp.ddLabel }}</div>
+
+          <div style="display:flex; flex-direction:column; gap:9px;">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.24em; color:#6b7488;">MEDIA ON THE TV BOARD</div>
+            <div style="display:flex; gap:8px;">
+              <sc-for list="{{ mediaOpts }}" as="m" hint-placeholder-count="3">
+                <div onClick="{{ m.onClick }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; color:{{ m.fg }}; background:{{ m.bg }}; border:1px solid {{ m.border }}; padding:11px 0;" style-hover="filter:brightness(1.2);">{{ m.label }}</div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ insp.hasMedia }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex; flex-direction:column; gap:7px;">
+                <input value="{{ insp.mediaLabel }}" onChange="{{ setMediaLabel }}" placeholder="[ DROP FILE HERE ]" style="width:100%; padding:11px 12px; font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.1em;">
+                <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.14em; color:#4f596d; line-height:1.8;">{{ insp.mediaHint }}</div>
+              </div>
+            </sc-if>
+          </div>
+
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.14em; color:#3f4859; line-height:2; border-top:1px solid #141b26; padding-top:16px;">{{ insp.tip }}</div>
+        </div>
+
+        <div style="flex:none; border-top:1px solid #1a2130; padding:16px 22px; display:flex; flex-direction:column; gap:9px;">
+          <div style="display:flex; gap:8px;">
+            <div onClick="{{ prevCell }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; color:#c9d2e2; background:#141b28; border:1px solid #26303f; padding:12px 0;" style-hover="background:#1d2636;">◀ PREV</div>
+            <div onClick="{{ nextCell }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; color:#c9d2e2; background:#141b28; border:1px solid #26303f; padding:12px 0;" style-hover="background:#1d2636;">NEXT ▶</div>
+            <div onClick="{{ clearClue }}" style="cursor:pointer; flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.16em; color:#f0803c; background:#141b28; border:1px solid #26303f; padding:12px 0;" style-hover="background:#1d2636;">✕ CLEAR</div>
+          </div>
+          <div onClick="{{ previewClue }}" style="cursor:pointer; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:12px; letter-spacing:.2em; font-weight:600; color:#0a0d14; background:#f0c469; padding:15px;" style-hover="background:#ffdc94;">▶ PREVIEW THIS CLUE ON THE TV BOARD</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:2100,&quot;height&quot;:1400},&quot;timerSeconds&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:20,&quot;tsType&quot;:&quot;number&quot;,&quot;min&quot;:5,&quot;max&quot;:60,&quot;step&quot;:5,&quot;unit&quot;:&quot;s&quot;,&quot;section&quot;:&quot;Game rules&quot;},&quot;lockoutStyle&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;queue&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;options&quot;:[&quot;queue&quot;,&quot;first-only&quot;],&quot;section&quot;:&quot;Game rules&quot;},&quot;teamMode&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Game rules&quot;}}">
+const SAMPLE = [
+  { name: "VANGUARD BRASS", clues: [
+    { t: "The stern Awoken Titan who commands the Vanguard from the Tower.", a: "Who is Zavala?" },
+    { t: "This Warlock Vanguard runs a quiet network of hidden agents across the system.", a: "Who is Ikora Rey?" },
+    { t: "The Exo Hunter whose hand cannon, the Ace of Spades, outlived him.", a: "Who is Cayde-6?" },
+    { t: "This amnesiac Exo gunsmith reforges weapons in the Tower courtyard.", a: "Who is Banshee-44?" },
+    { t: "The Titan who held the wall alone and left only his helmet behind.", a: "Who is Saint-14?" } ] },
+  { name: "EXOTIC ARSENAL", clues: [
+    { t: "This hand cannon fires explosive solar rounds and rewards you for never stopping.", a: "What is Sunshot?" },
+    { t: "Identify the exotic from its silhouette — the launcher whose missiles hunt in a pack.", a: "What is Gjallarhorn?", media: "image", mediaLabel: "[ WEAPON SILHOUETTE — DROP IMAGE HERE ]" },
+    { t: "Forged by the Vex, this weapon fires a beam rather than a bullet.", a: "What is Vex Mythoclast?" },
+    { t: "A hand cannon carved from bone that poisons everything it touches.", a: "What is Thorn?" },
+    { t: "Watch the reload and name the sniper rifle hidden behind a jumping puzzle.", a: "What is Whisper of the Worm?", media: "video", mediaLabel: "[ 12s VIDEO CLIP — DROP FILE HERE ]" } ] },
+  { name: "RAID LORE", clues: [
+    { t: "This raid beneath the surface of Venus ends in a fight against time itself.", a: "What is Vault of Glass?" },
+    { t: "The raid in which Oryx, the Taken King, finally falls.", a: "What is King's Fall?" },
+    { t: "Aboard a derelict Cabal ship, this raid asked Guardians to dine with an emperor.", a: "What is Leviathan?" },
+    { t: "Name the raid staged inside a Vex simulation growing out of the Black Garden.", a: "What is Garden of Salvation?", dd: true },
+    { t: "Six Guardians, one Ahamkara skull, and a Hive prince in the Dreaming City.", a: "What is Last Wish?" } ] },
+  { name: "CRUCIBLE", clues: [
+    { t: "The 6v6 mode where the only objective is putting the other team on the floor.", a: "What is Clash?" },
+    { t: "Hold zones A, B and C to swing the score multiplier in this classic mode.", a: "What is Control?" },
+    { t: "The 3v3 elimination pilgrimage that pays out only for a flawless card.", a: "What is Trials of Osiris?" },
+    { t: "This booming Crucible handler wants you to know he never gets tired of this.", a: "Who is Lord Shaxx?" },
+    { t: "Identify this Crucible arena from a single wide shot of its centre lane.", a: "What is Rusted Lands?", media: "image", mediaLabel: "[ MAP SCREENSHOT — DROP IMAGE HERE ]" } ] },
+  { name: "HIVE & DARKNESS", clues: [
+    { t: "The Taken King, brother to Savathûn and Xivu Arath.", a: "Who is Oryx?" },
+    { t: "The Witch Queen who stole the Light for her Lucent Brood.", a: "Who is Savathûn?" },
+    { t: "The Hive god of war, who feeds on conflict wherever it burns.", a: "Who is Xivu Arath?" },
+    { t: "The black, triangular ships that carry the Darkness into the system.", a: "What are the Pyramids?", dd: true },
+    { t: "Watch the clip and name the Hive ritual space this fireteam has wandered into.", a: "What is the Shrine of Oryx?", media: "video", mediaLabel: "[ 10s VIDEO CLIP — DROP FILE HERE ]" } ] },
+  { name: "LOST TO TIME", clues: [
+    { t: "The vast paracausal sphere hanging silent above the Last City.", a: "What is the Traveler?" },
+    { t: "The catastrophe that ended the Golden Age and nearly ended humanity.", a: "What is the Collapse?" },
+    { t: "Every Guardian is raised by one of these small, talkative companions.", a: "What is a Ghost?" },
+    { t: "The Warmind sealed beneath the polar ice of Mars.", a: "Who is Rasputin?" },
+    { t: "The figure out of time who handed you a rifle and then vanished for years.", a: "Who is the Exo Stranger?" } ] } ];
+
+const ROWS = 5;
+const MIN_CATS = 2, MAX_CATS = 8;
+const MIN_PLAYERS = 2, MAX_PLAYERS = 6;
+const DEFAULT_VALUES = ["200", "400", "600", "800", "1000"];
+const TINTS = ["#7fd8f0", "#f0c469", "#f0803c", "#b18cf0", "#8fd98a", "#ff8fb0"];
+const DEFAULT_ROSTER = [
+  { name: "OWL-SECTOR", cls: "TITAN" },
+  { name: "SHAXX-STAN", cls: "HUNTER" },
+  { name: "VEXBAIT", cls: "WARLOCK" },
+  { name: "GJALLARDAD", cls: "TITAN" }
+];
+const PRESET_USED = [[0, 0], [2, 0], [3, 1], [5, 0], [5, 3]];
+
+let UID = 0;
+const str = v => (v == null ? "" : String(v));
+const num = v => { const n = Number(v); return isFinite(n) ? n : 0; };
+
+function mkClue(o) {
+  o = (o && typeof o === "object") ? o : {};
+  const media = (o.media === "image" || o.media === "video") ? o.media : "";
+  return { id: "q" + (++UID), t: str(o.t), a: str(o.a), dd: !!o.dd, media, mediaLabel: str(o.mediaLabel) };
+}
+function mkCat(name, clues) {
+  const list = [];
+  for (let i = 0; i < ROWS; i++) list.push(mkClue(clues && clues[i]));
+  return { id: "c" + (++UID), name: str(name), clues: list };
+}
+function sampleCats() { return SAMPLE.map(c => mkCat(c.name, c.clues)); }
+function blankCats(n) { const out = []; for (let i = 0; i < n; i++) out.push(mkCat("")); return out; }
+function isReady(q) { return !!(q.t.trim() && q.a.trim()); }
+function trunc(s, n) {
+  s = s.trim().replace(/\s+/g, " ");
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+function freshGame() {
+  const cats = sampleCats();
+  const used = {};
+  PRESET_USED.forEach(p => { used[cats[p[0]].clues[p[1]].id] = true; });
+  return { cats, used };
+}
+
+/* ---------- the portable game format ----------
+   One shape shared by autosave, restore, export and import, so the four can
+   never drift apart. Scores and played tiles are deliberately absent: they are
+   session state, not part of the game you authored. */
+
+function toGame(s) {
+  return {
+    title: s.title,
+    subtitle: s.subtitle,
+    roomCode: s.roomCode,
+    values: s.values.map(num),
+    players: s.roster.map(p => ({ name: p.name, cls: p.cls })),
+    categories: s.cats.map(c => ({
+      name: c.name,
+      clues: c.clues.map(q => {
+        const out = { t: q.t, a: q.a };
+        if (q.dd) out.dd = true;
+        if (q.media) { out.media = q.media; out.mediaLabel = q.mediaLabel; }
+        return out;
+      })
+    }))
+  };
+}
+
+/** Game object -> state patch. Returns null if it isn't a usable game. */
+function fromGame(game) {
+  if (!game || !Array.isArray(game.categories) || !game.categories.length) return null;
+  const cats = game.categories.slice(0, MAX_CATS).map(c => mkCat(c && c.name, c && c.clues));
+  while (cats.length < MIN_CATS) cats.push(mkCat(""));
+
+  const patch = { cats, used: {}, open: null, revealed: false, sel: { c: 0, r: 0 }, armed: "" };
+  if (Array.isArray(game.values) && game.values.length === ROWS) patch.values = game.values.map(v => String(num(v)));
+  if (typeof game.title === "string") patch.title = game.title;
+  if (typeof game.subtitle === "string") patch.subtitle = game.subtitle;
+  if (typeof game.roomCode === "string") patch.roomCode = game.roomCode.toUpperCase();
+  if (Array.isArray(game.players) && game.players.length >= MIN_PLAYERS) {
+    const roster = game.players.slice(0, MAX_PLAYERS).map(p => ({ name: str(p && p.name), cls: str(p && p.cls) }));
+    patch.roster = roster;
+    patch.scores = roster.map(() => 0);
+  }
+  return patch;
+}
+
+/* ---------- autosave ----------
+   Reading window.localStorage can itself throw (sandboxed iframe, cookies
+   disabled, Safari private mode), so probe once up front and fall back to
+   "autosave off" rather than letting the whole component fail to mount. */
+
+const SAVE_KEY = "guardian-jeopardy/game/v1";
+const STORE = (() => {
+  try {
+    const ls = window.localStorage;
+    ls.setItem(SAVE_KEY + "/probe", "1");
+    ls.removeItem(SAVE_KEY + "/probe");
+    return ls;
+  } catch (err) {
+    console.info("[guardian-jeopardy] localStorage unavailable — autosave off:", err && err.name);
+    return null;
+  }
+})();
+
+function loadSaved() {
+  if (!STORE) return null;
+  try {
+    const raw = STORE.getItem(SAVE_KEY);
+    return raw ? fromGame(JSON.parse(raw)) : null;
+  } catch (err) {
+    console.warn("[guardian-jeopardy] saved game was unreadable, ignoring it:", err);
+    return null;
+  }
+}
+
+function saveGame(s) {
+  if (!STORE) return;
+  try {
+    STORE.setItem(SAVE_KEY, JSON.stringify(toGame(s)));
+  } catch (err) {
+    console.warn("[guardian-jeopardy] could not autosave:", err);
+  }
+}
+
+class Component extends DCLogic {
+  state = Object.assign({
+    open: null,
+    revealed: false,
+    timerKey: 0,
+    buzzedSelf: false,
+    scores: [3100, 2400, 1650, -200],
+    values: DEFAULT_VALUES.slice(),
+    title: "GUARDIAN JEOPARDY",
+    subtitle: "SEASON OF THE ANSWER · ROUND 01",
+    roomCode: "VEX7",
+    roster: DEFAULT_ROSTER.map(p => Object.assign({}, p)),
+    sel: { c: 0, r: 0 },
+    armed: "",
+    ioOpen: false,
+    ioText: "",
+    ioMsg: "",
+    ioMsgColor: "#4f596d"
+  }, freshGame(), loadSaved() || {});
+
+  /* Autosave on every change, coalesced so a burst of keystrokes writes once.
+     localStorage writes are synchronous, so this keeps typing smooth. */
+  componentDidUpdate() {
+    if (!STORE) return;
+    clearTimeout(this.__saveTimer);
+    this.__saveTimer = setTimeout(() => saveGame(this.state), 300);
+  }
+
+  componentWillUnmount() {
+    clearTimeout(this.__saveTimer);
+  }
+
+  award(sign) {
+    const o = this.state.open; if (!o) return;
+    this.setState(s => {
+      const v = num(s.values[o.r]) * sign;
+      const scores = s.scores.slice();
+      const i = Math.min(1, scores.length - 1);
+      scores[i] += v;
+      const used = Object.assign({}, s.used);
+      const cat = s.cats[o.c];
+      if (sign > 0 && cat && cat.clues[o.r]) used[cat.clues[o.r].id] = true;
+      return { scores, used, open: sign > 0 ? null : s.open, revealed: false, buzzedSelf: false };
+    });
+  }
+
+  bump(i, d) { this.setState(s => { const sc = s.scores.slice(); sc[i] += d; return { scores: sc }; }); }
+
+  /* ---------- editor mutations ---------- */
+
+  patchClue(patch) {
+    this.setState(s => {
+      const { c, r } = s.sel;
+      if (!s.cats[c] || !s.cats[c].clues[r]) return {};
+      const cats = s.cats.slice();
+      const clues = cats[c].clues.slice();
+      clues[r] = Object.assign({}, clues[r], patch);
+      cats[c] = Object.assign({}, cats[c], { clues });
+      return { cats, armed: "" };
+    });
+  }
+
+  setCatName(ci, name) {
+    this.setState(s => {
+      if (!s.cats[ci]) return {};
+      const cats = s.cats.slice();
+      cats[ci] = Object.assign({}, cats[ci], { name });
+      return { cats, armed: "" };
+    });
+  }
+
+  addCat() {
+    this.setState(s => {
+      if (s.cats.length >= MAX_CATS) return { armed: "" };
+      const cats = s.cats.concat([mkCat("NEW CATEGORY")]);
+      return { cats, sel: { c: cats.length - 1, r: 0 }, open: null, armed: "" };
+    });
+  }
+
+  delCat(ci) {
+    this.setState(s => {
+      if (s.cats.length <= MIN_CATS) return { armed: "" };
+      const cats = s.cats.slice();
+      cats.splice(ci, 1);
+      return { cats, sel: { c: Math.min(s.sel.c, cats.length - 1), r: s.sel.r }, open: null, armed: "" };
+    });
+  }
+
+  moveCat(ci, dir) {
+    this.setState(s => {
+      const j = ci + dir;
+      if (j < 0 || j >= s.cats.length) return { armed: "" };
+      const cats = s.cats.slice();
+      const tmp = cats[ci]; cats[ci] = cats[j]; cats[j] = tmp;
+      return { cats, sel: { c: j, r: s.sel.r }, open: null, armed: "" };
+    });
+  }
+
+  stepSel(d) {
+    this.setState(s => {
+      const n = s.cats.length * ROWS;
+      if (!n) return {};
+      const i = ((s.sel.c * ROWS + s.sel.r + d) % n + n) % n;
+      return { sel: { c: Math.floor(i / ROWS), r: i % ROWS }, armed: "" };
+    });
+  }
+
+  setValue(ri, raw) {
+    this.setState(s => {
+      const values = s.values.slice();
+      values[ri] = str(raw).replace(/[^0-9-]/g, "");
+      return { values, armed: "" };
+    });
+  }
+
+  scaleValues(m) {
+    this.setState(s => ({ values: s.values.map(v => String(Math.round(num(v) * m))), armed: "" }));
+  }
+
+  setPlayer(i, key, val) {
+    this.setState(s => {
+      if (!s.roster[i]) return {};
+      const roster = s.roster.slice();
+      roster[i] = Object.assign({}, roster[i], { [key]: val });
+      return { roster, armed: "" };
+    });
+  }
+
+  addPlayer() {
+    this.setState(s => {
+      if (s.roster.length >= MAX_PLAYERS) return { armed: "" };
+      const roster = s.roster.concat([{ name: "GUARDIAN " + (s.roster.length + 1), cls: "TITAN" }]);
+      return { roster, scores: s.scores.concat([0]), armed: "" };
+    });
+  }
+
+  delPlayer(i) {
+    this.setState(s => {
+      if (s.roster.length <= MIN_PLAYERS) return { armed: "" };
+      const roster = s.roster.slice(); roster.splice(i, 1);
+      const scores = s.scores.slice(); scores.splice(i, 1);
+      return { roster, scores, armed: "" };
+    });
+  }
+
+  /** Two-tap guard for the destructive board actions. */
+  arm(key, run) {
+    if (this.state.armed === key) { this.setState({ armed: "" }); run(); }
+    else this.setState({ armed: key });
+  }
+
+  /* ---------- save / load ---------- */
+
+  exportJSON() {
+    this.setState({
+      ioOpen: true,
+      ioText: JSON.stringify(toGame(this.state), null, 2),
+      ioMsg: "EXPORTED · SELECT ALL AND COPY TO SAVE OR SHARE THIS GAME",
+      ioMsgColor: "#8fd98a"
+    });
+  }
+
+  importJSON() {
+    let game;
+    try {
+      game = JSON.parse(this.state.ioText);
+    } catch (err) {
+      this.setState({ ioMsg: "NOT VALID JSON · " + String(err.message).toUpperCase(), ioMsgColor: "#f0803c" });
+      return;
+    }
+    const patch = fromGame(game);
+    if (!patch) {
+      this.setState({ ioMsg: 'NEEDS A NON-EMPTY "CATEGORIES" ARRAY · SEE THE SHAPE IN THE PLACEHOLDER', ioMsgColor: "#f0803c" });
+      return;
+    }
+    let ready = 0;
+    patch.cats.forEach(c => c.clues.forEach(q => { if (isReady(q)) ready++; }));
+    patch.ioMsg = "LOADED · " + patch.cats.length + " CATEGORIES · " + ready + " OF " + (patch.cats.length * ROWS) + " CLUES READY";
+    patch.ioMsgColor = "#8fd98a";
+    this.setState(patch);
+  }
+
+  renderVals() {
+    const st = this.state;
+    const seconds = this.props.timerSeconds ?? 20;
+    const teamWord = this.props.teamMode ? "FIRETEAM" : "GUARDIAN";
+    const queueMode = (this.props.lockoutStyle ?? "queue") === "queue";
+
+    const cats = st.cats;
+    const vals = st.values.map(num);
+    const sel = st.sel;
+
+    const columns = cats.map((cat, ci) => ({
+      name: cat.name || "—",
+      tiles: cat.clues.map((q, ri) => {
+        const used = !!st.used[q.id];
+        return {
+          value: vals[ri], live: !used, used,
+          onClick: () => this.setState({ open: { c: ci, r: ri }, sel: { c: ci, r: ri }, revealed: false, buzzedSelf: false, timerKey: st.timerKey + 1, armed: "" })
+        };
+      })
+    }));
+
+    const openCat = st.open ? cats[st.open.c] : null;
+    const o = openCat ? openCat.clues[st.open.r] : null;
+    const open = o ? {
+      cat: openCat.name || "—",
+      value: vals[st.open.r],
+      text: o.t.trim() || "This clue has no text yet — write it in the game editor below.",
+      answer: o.a.trim() || "—",
+      dd: !!o.dd, hasMedia: !!o.media,
+      mediaLabel: o.mediaLabel.trim() || (o.media === "video" ? "[ VIDEO CLIP ]" : "[ IMAGE ]")
+    } : { cat: "NO CLUE OPEN", value: "—", text: "Pick a tile on the board to bring a clue up on the TV.", answer: "—", dd: false, hasMedia: false, mediaLabel: "" };
+
+    const players = st.roster.map((p, i) => {
+      const sc = st.scores[i] || 0;
+      return {
+        name: p.name.trim() || "PLAYER " + (i + 1),
+        cls: (p.cls.trim() || "GUARDIAN") + " · " + teamWord,
+        tint: TINTS[i % TINTS.length],
+        scoreText: (sc < 0 ? "−" : "") + Math.abs(sc).toLocaleString(),
+        scoreColor: sc < 0 ? "#f0803c" : "#e8ecf4",
+        plus: () => this.bump(i, 100), minus: () => this.bump(i, -100), bonus: () => this.bump(i, 250)
+      };
+    });
+
+    const meIdx = Math.min(1, players.length - 1);
+    const meRank = st.scores.slice().sort((a, b) => b - a).indexOf(st.scores[meIdx]) + 1;
+    const me = {
+      name: players[meIdx].name,
+      meta: (st.roster[meIdx].cls.trim() || "GUARDIAN") + " · RANK " + meRank + " OF " + players.length,
+      scoreText: players[meIdx].scoreText
+    };
+
+    const deltas = ["0.38s", "+0.11s", "+0.62s"];
+    const rawBuzz = [1, 2, 0].filter(i => i < players.length).map((pi, k) => ({ name: players[pi].name, delta: deltas[k] }));
+    if (st.buzzedSelf) rawBuzz.push({ name: "YOU (PREVIEW)", delta: "+1.04s" });
+    const buzzes = (queueMode ? rawBuzz : rawBuzz.slice(0, 1)).map((b, i) => ({
+      name: b.name, delta: b.delta, rank: i + 1, active: i === 0,
+      bg: i === 0 ? "rgba(240,196,105,.12)" : "rgba(255,255,255,.025)",
+      border: i === 0 ? "#8a6f2c" : "#232b3c",
+      rankColor: i === 0 ? "#f0c469" : "#5f6a80"
+    }));
+
+    const railItems = [
+      { label: "BOARD", key: "board" }, { label: "CLUE", key: "clue" },
+      { label: "SCORES", key: "scores" }, { label: "FINAL", key: "final" }
+    ].map((r, i) => ({
+      label: r.label,
+      bg: i === 1 ? "rgba(240,196,105,.1)" : "transparent",
+      border: i === 1 ? "#8a6f2c" : "#1e2635",
+      fg: i === 1 ? "#f0c469" : "#6b7488",
+      onClick: () => {}
+    }));
+
+    /* ---------- editor view-model ---------- */
+
+    const totalClues = cats.length * ROWS;
+    let readyCount = 0, usedCount = 0;
+    cats.forEach(c => c.clues.forEach(q => {
+      if (isReady(q)) readyCount++;
+      if (st.used[q.id]) usedCount++;
+    }));
+
+    const editorCats = cats.map((cat, ci) => ({
+      name: cat.name,
+      onName: e => this.setCatName(ci, e.target.value),
+      onLeft: () => this.moveCat(ci, -1),
+      onRight: () => this.moveCat(ci, 1),
+      onDelete: () => this.delCat(ci),
+      delColor: cats.length > MIN_CATS ? "#f0803c" : "#2f3a4f",
+      cells: cat.clues.map((q, ri) => {
+        const done = isReady(q);
+        const started = !done && !!(q.t.trim() || q.a.trim());
+        const active = ci === sel.c && ri === sel.r;
+        return {
+          value: vals[ri],
+          preview: q.t.trim() ? trunc(q.t, 76) : "EMPTY · CLICK TO WRITE",
+          dot: done ? "#8fd98a" : started ? "#f0803c" : "#2f3a4f",
+          dd: !!q.dd,
+          hasMedia: !!q.media,
+          mediaTag: q.media === "video" ? "VID" : "IMG",
+          bg: active ? "rgba(240,196,105,.10)" : done ? "#0d1219" : "#090c13",
+          border: active ? "#f0c469" : "#1e2635",
+          valColor: active ? "#f0c469" : "#6b7488",
+          textColor: q.t.trim() ? "#c9d2e2" : "#4f596d",
+          onClick: () => this.setState({ sel: { c: ci, r: ri }, armed: "" })
+        };
+      })
+    }));
+
+    const selCat = cats[sel.c];
+    const selClue = selCat ? selCat.clues[sel.r] : null;
+    const media = selClue ? selClue.media : "";
+    const insp = {
+      cat: selCat ? (selCat.name.trim() || "UNTITLED CATEGORY") : "—",
+      value: vals[sel.r],
+      coord: "COLUMN " + (sel.c + 1) + " OF " + cats.length + " · ROW " + (sel.r + 1) + " OF " + ROWS,
+      t: selClue ? selClue.t : "",
+      a: selClue ? selClue.a : "",
+      hasMedia: !!media,
+      mediaLabel: selClue ? selClue.mediaLabel : "",
+      mediaHint: media === "video"
+        ? "THE TV BOARD SHOWS A VIDEO PLACEHOLDER CARRYING THIS LABEL."
+        : "THE TV BOARD SHOWS AN IMAGE PLACEHOLDER CARRYING THIS LABEL.",
+      ddLabel: (selClue && selClue.dd) ? "◆ DAILY DOUBLE · ON" : "◇ MAKE THIS A DAILY DOUBLE",
+      ddBg: (selClue && selClue.dd) ? "#f0803c" : "#141b28",
+      ddFg: (selClue && selClue.dd) ? "#0a0d14" : "#8b95ab",
+      ddBorder: (selClue && selClue.dd) ? "#f0803c" : "#26303f",
+      tip: "PHRASE THE RESPONSE AS A QUESTION SO THE HOST CAN READ IT STRAIGHT OFF THE CONSOLE. A CLUE COUNTS AS READY ONCE IT HAS BOTH A CLUE AND A RESPONSE."
+    };
+
+    const mediaOpts = [["", "NONE"], ["image", "IMAGE"], ["video", "VIDEO"]].map(pair => {
+      const on = media === pair[0];
+      return {
+        label: pair[1],
+        bg: on ? "#f0c469" : "#141b28",
+        fg: on ? "#0a0d14" : "#8b95ab",
+        border: on ? "#f0c469" : "#26303f",
+        onClick: () => this.patchClue({ media: pair[0] })
+      };
+    });
+
+    const editorPlayers = st.roster.map((p, i) => ({
+      name: p.name, cls: p.cls, tint: TINTS[i % TINTS.length],
+      onName: e => this.setPlayer(i, "name", e.target.value),
+      onCls: e => this.setPlayer(i, "cls", e.target.value),
+      onDelete: () => this.delPlayer(i),
+      delColor: st.roster.length > MIN_PLAYERS ? "#f0803c" : "#2f3a4f"
+    }));
+
+    const valueRows = st.values.map((v, i) => ({
+      label: "R" + (i + 1), raw: v,
+      onChange: e => this.setValue(i, e.target.value)
+    }));
+
+    return {
+      columns, players, buzzes, railItems, open, me,
+      openFlag: !!st.open, noClue: !st.open, revealed: st.revealed,
+      title: st.title || "GUARDIAN JEOPARDY",
+      subtitle: st.subtitle,
+      roomCode: st.roomCode || "----",
+      playerCount: players.length,
+      playerCols: "repeat(" + players.length + ",1fr)",
+      boardCols: "repeat(" + cats.length + ",1fr)",
+      timerSeconds: seconds,
+      tilesLeft: totalClues - usedCount,
+
+      /* editor */
+      editorCats, editorPlayers, valueRows, insp, mediaOpts,
+      editorCols: "repeat(" + cats.length + ",1fr)",
+      readyCount, totalClues,
+      readyPct: totalClues ? Math.round((readyCount / totalClues) * 100) : 0,
+      saveNote: STORE ? "AUTOSAVED IN THIS BROWSER" : "AUTOSAVE OFF · USE EXPORT",
+      saveColor: STORE ? "#8fd98a" : "#f0803c",
+      addCatBg: cats.length >= MAX_CATS ? "#3d4a63" : "#8fd98a",
+      addPlayerColor: st.roster.length >= MAX_PLAYERS ? "#3f4859" : "#8b95ab",
+      setTitle: e => this.setState({ title: e.target.value, armed: "" }),
+      setSubtitle: e => this.setState({ subtitle: e.target.value, armed: "" }),
+      setRoom: e => this.setState({ roomCode: e.target.value.toUpperCase(), armed: "" }),
+      setClueText: e => this.patchClue({ t: e.target.value }),
+      setClueAnswer: e => this.patchClue({ a: e.target.value }),
+      setMediaLabel: e => this.patchClue({ mediaLabel: e.target.value }),
+      toggleDD: () => this.patchClue({ dd: !(selClue && selClue.dd) }),
+      clearClue: () => this.patchClue({ t: "", a: "", dd: false, media: "", mediaLabel: "" }),
+      previewClue: () => this.setState(s => ({ open: { c: s.sel.c, r: s.sel.r }, revealed: false, buzzedSelf: false, timerKey: s.timerKey + 1, armed: "" })),
+      prevCell: () => this.stepSel(-1),
+      nextCell: () => this.stepSel(1),
+      addCat: () => this.addCat(),
+      addPlayer: () => this.addPlayer(),
+      doubleValues: () => this.scaleValues(2),
+      halveValues: () => this.scaleValues(0.5),
+      resetValues: () => this.setState({ values: DEFAULT_VALUES.slice(), armed: "" }),
+      resetPlayed: () => this.setState({ used: {}, open: null, revealed: false, armed: "" }),
+      blankBoard: () => this.arm("blank", () => this.setState(s => ({
+        cats: blankCats(s.cats.length), used: {}, open: null, revealed: false, sel: { c: 0, r: 0 }
+      }))),
+      blankLabel: st.armed === "blank" ? "TAP AGAIN TO WIPE EVERY CLUE" : "✕ BLANK BOARD",
+      blankColor: st.armed === "blank" ? "#f0803c" : "#c9d2e2",
+      blankBorder: st.armed === "blank" ? "#f0803c" : "#26303f",
+      loadSample: () => this.arm("sample", () => {
+        const g = freshGame();
+        this.setState({ cats: g.cats, used: {}, open: null, revealed: false, sel: { c: 0, r: 0 } });
+      }),
+      sampleLabel: st.armed === "sample" ? "TAP AGAIN TO REPLACE THIS GAME" : "↺ LOAD THE SAMPLE GAME",
+      sampleColor: st.armed === "sample" ? "#f0803c" : "#c9d2e2",
+      sampleBorder: st.armed === "sample" ? "#f0803c" : "#26303f",
+      ioOpen: st.ioOpen,
+      ioText: st.ioText,
+      ioMsg: st.ioMsg || "PASTE A SAVED GAME AND HIT LOAD, OR EXPORT THE ONE YOU HAVE.",
+      ioMsgColor: st.ioMsgColor,
+      ioToggleLabel: st.ioOpen ? "▲ HIDE IMPORT / EXPORT" : "▼ IMPORT / EXPORT JSON",
+      toggleIo: () => this.setState(s => ({ ioOpen: !s.ioOpen, armed: "" })),
+      setIoText: e => this.setState({ ioText: e.target.value }),
+      doExport: () => this.exportJSON(),
+      doImport: () => this.importJSON(),
+      lockoutNote: queueMode
+        ? "EVERYONE MAY BUZZ. THE HOST RULES ON THE TOP ENTRY FIRST; A MISS DROPS TO THE NEXT."
+        : "FIRST BUZZ LOCKS THE ROOM UNTIL THE HOST RULES.",
+      revealLabel: st.revealed ? "◇ HIDE ANSWER ON TV" : "◆ REVEAL ANSWER ON TV",
+      closeClue: () => this.setState({ open: null, revealed: false }),
+      toggleReveal: () => this.setState(s => ({ revealed: !s.revealed })),
+      resetTimer: () => this.setState(s => ({ timerKey: s.timerKey + 1 })),
+      markCorrect: () => this.award(1),
+      markWrong: () => this.award(-1),
+      startFinal: () => {},
+      toggleBuzz: () => this.setState(s => ({ buzzedSelf: !s.buzzedSelf })),
+      buzzLabel: st.buzzedSelf ? "IN" : "BUZZ",
+      buzzSub: st.buzzedSelf ? "QUEUED · POSITION 4" : "SLAM IT",
+      buzzBg: st.buzzedSelf ? "radial-gradient(circle at 50% 35%, #ffe0a0, #d99a2e)" : "radial-gradient(circle at 50% 35%, #2b3448, #131a28)",
+      buzzBorder: st.buzzedSelf ? "#ffe0a0" : "#3d4a63",
+      buzzFg: st.buzzedSelf ? "#241a05" : "#e8ecf4",
+      phoneBg: st.buzzedSelf ? "radial-gradient(90% 60% at 50% 45%, #2c1e06, #0a0a10 75%)" : "radial-gradient(120% 70% at 50% 0%, #17203a, #07090f 70%)",
+      phoneHint: st.buzzedSelf ? "LOCKED IN — WAIT FOR THE HOST" : "CLUE IS LIVE\nHIT IT THE SECOND YOU KNOW",
+      phoneHintColor: st.buzzedSelf ? "#c9a860" : "#7fd8f0",
+      phoneStatus: st.buzzedSelf ? "HAPTIC SENT · SCREEN FLASHED" : "TAP THE BUTTON TO SEE THE LOCKOUT STATE"
+    };
+  }
+}
+</script>
+</body>
+</html>
