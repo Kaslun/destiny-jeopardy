@@ -19,6 +19,7 @@ import {
   finalBounds,
   finalEligible,
   isSlug,
+  MAX_MEDIA_BYTES,
   parseGame,
   wagerBounds,
   type BoardClientMessage,
@@ -35,6 +36,7 @@ import {
 interface Env {
   JeopardyRoom: DurableObjectNamespace<JeopardyRoom>;
   BoardStore: DurableObjectNamespace<BoardStore>;
+  MEDIA: R2Bucket;
 }
 
 interface ConnMeta {
@@ -537,15 +539,29 @@ export class BoardStore extends Server<Env> {
   #loaded = false;
 
   async onStart() {
-    this.#game = (await this.ctx.storage.get<Game>("game")) ?? null;
-    this.#loaded = true;
+    await this.#load();
   }
 
   async #ready() {
-    if (!this.#loaded) {
-      this.#game = (await this.ctx.storage.get<Game>("game")) ?? null;
-      this.#loaded = true;
+    if (!this.#loaded) await this.#load();
+  }
+
+  /**
+   * Boards saved before collaborative editing existed have no ids on their
+   * categories and clues, and every edit operation addresses them by id. So
+   * everything is normalised on the way in and written back once, which
+   * backfills those ids permanently instead of regenerating them each wake.
+   */
+  async #load() {
+    const stored = await this.ctx.storage.get<Game>("game");
+    this.#loaded = true;
+    if (!stored) {
+      this.#game = null;
+      return;
     }
+    const needsIds = stored.categories.some((c) => !c.id || c.clues.some((q) => !q.id));
+    this.#game = needsIds ? (parseGame(stored) ?? stored) : stored;
+    if (needsIds && this.#game) await this.#persist();
   }
 
   async onConnect(conn: Connection) {
@@ -687,12 +703,156 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+const EXT: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/avif": "avif",
+  "video/mp4": "mp4",
+  "video/webm": "webm",
+  "video/quicktime": "mov",
+};
+
+/**
+ * Stream an upload straight into R2.
+ *
+ * The body is piped rather than buffered, so a 40 MB clip never lands in the
+ * isolate's 128 MB heap, and the wait is network I/O which does not count
+ * against the Worker's CPU budget.
+ */
+async function uploadMedia(request: Request, env: Env, slug: string, clueId: string): Promise<Response> {
+  if (!isSlug(slug) || !/^[A-Za-z0-9_-]{1,40}$/.test(clueId)) {
+    return json({ error: "bad upload target" }, 400);
+  }
+
+  const type = (request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  const isImage = type.startsWith("image/");
+  const isVideo = type.startsWith("video/");
+  if (!isImage && !isVideo) {
+    return json({ error: "only images and video can be uploaded" }, 415);
+  }
+
+  const tooBig = `that file is too big — the limit is ${Math.round(MAX_MEDIA_BYTES / 1024 / 1024)} MB`;
+
+  const declared = Number(request.headers.get("content-length") || "0");
+  if (declared > MAX_MEDIA_BYTES) return json({ error: tooBig }, 413);
+  if (!request.body) return json({ error: "no file in the request" }, 400);
+
+  // A fresh random segment per upload, so replacing a clue's media can never be
+  // served from a stale cache under the old URL.
+  const ext = EXT[type] ?? (isVideo ? "bin" : "img");
+  const key = `boards/${slug}/${clueId}/${crypto.randomUUID().slice(0, 12)}.${ext}`;
+
+  // R2 will only take a stream whose length it knows. A request body that
+  // declared content-length already qualifies, so it streams straight through
+  // and never lands in the isolate's heap.
+  let body: ReadableStream<Uint8Array> | Uint8Array;
+
+  if (declared > 0) {
+    body = request.body;
+  } else {
+    // Chunked upload: no declared length, so read it with a hard ceiling rather
+    // than trusting an unbounded stream. Never holds more than the limit.
+    const reader = request.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let seen = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      seen += value.byteLength;
+      if (seen > MAX_MEDIA_BYTES) {
+        await reader.cancel().catch(() => {});
+        return json({ error: tooBig }, 413);
+      }
+      chunks.push(value);
+    }
+    body = new Uint8Array(seen);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+  }
+
+  try {
+    await env.MEDIA.put(key, body, { httpMetadata: { contentType: type } });
+  } catch (err) {
+    // Best-effort tidy-up; a partial object would just waste space.
+    await env.MEDIA.delete(key).catch(() => {});
+    console.error("[media] put failed", err);
+    return json({ error: "upload failed" }, 500);
+  }
+
+  return json({ key, media: isVideo ? "video" : "image", contentType: type });
+}
+
+/** Serve a stored file, honouring Range so video scrubbing works. */
+async function serveMedia(request: Request, env: Env, key: string): Promise<Response> {
+  const range = request.headers.get("range");
+  const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+
+  if (match) {
+    const head = await env.MEDIA.head(key);
+    if (!head) return json({ error: "not found" }, 404);
+    const size = head.size;
+    const start = match[1] ? Number(match[1]) : 0;
+    const end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+
+    if (Number.isNaN(start) || start >= size || end < start) {
+      return new Response("range not satisfiable", {
+        status: 416,
+        headers: { "content-range": `bytes */${size}`, ...CORS },
+      });
+    }
+
+    const part = await env.MEDIA.get(key, { range: { offset: start, length: end - start + 1 } });
+    if (!part) return json({ error: "not found" }, 404);
+
+    return new Response(part.body, {
+      status: 206,
+      headers: {
+        "content-type": head.httpMetadata?.contentType ?? "application/octet-stream",
+        "content-range": `bytes ${start}-${end}/${size}`,
+        "content-length": String(end - start + 1),
+        "accept-ranges": "bytes",
+        "cache-control": "public, max-age=31536000, immutable",
+        ...CORS,
+      },
+    });
+  }
+
+  const object = await env.MEDIA.get(key);
+  if (!object) return json({ error: "not found" }, 404);
+
+  return new Response(object.body, {
+    headers: {
+      "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
+      "content-length": String(object.size),
+      "accept-ranges": "bytes",
+      "cache-control": "public, max-age=31536000, immutable",
+      ...CORS,
+    },
+  });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: CORS });
+    }
+
+    const upload = url.pathname.match(/^\/upload\/([^/]+)\/([^/]+)$/);
+    if (upload && request.method === "POST") {
+      return uploadMedia(request, env, decodeURIComponent(upload[1]).toUpperCase(), decodeURIComponent(upload[2]));
+    }
+
+    if (url.pathname.startsWith("/media/") && (request.method === "GET" || request.method === "HEAD")) {
+      const key = decodeURIComponent(url.pathname.slice("/media/".length));
+      if (!key || key.includes("..")) return json({ error: "bad key" }, 400);
+      return serveMedia(request, env, key);
     }
 
     const board = url.pathname.match(/^\/boards\/([^/]+)$/);

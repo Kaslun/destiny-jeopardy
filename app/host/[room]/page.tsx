@@ -5,6 +5,7 @@ import { useState } from "react";
 import { C, mono, money, tintFor } from "../../../lib/theme";
 import { useRole } from "../../../lib/useRoom";
 import { loadBoard } from "../../../lib/boards";
+import { mediaUrl } from "../../../lib/media";
 import { clueKey, parseGame } from "../../../shared/protocol";
 
 export default function HostConsole() {
@@ -234,6 +235,25 @@ export default function HostConsole() {
                     READ THIS ALOUD
                   </div>
                 </div>
+                {openClue.mediaKey && (
+                  <div
+                    style={{
+                      alignSelf: "flex-start",
+                      border: `1px solid ${C.line}`,
+                      background: "#05070c",
+                      maxHeight: 130,
+                      overflow: "hidden",
+                      display: "grid",
+                      placeItems: "center",
+                    }}
+                  >
+                    {openClue.media === "video" ? (
+                      <video src={mediaUrl(openClue.mediaKey)} controls preload="metadata" style={{ maxHeight: 130 }} />
+                    ) : (
+                      <img src={mediaUrl(openClue.mediaKey)} alt="" style={{ maxHeight: 130 }} />
+                    )}
+                  </div>
+                )}
                 <div style={{ fontSize: 26, fontWeight: 500, lineHeight: 1.35 }}>{openClue.t || "—"}</div>
                 <div
                   style={{

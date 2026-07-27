@@ -19,8 +19,13 @@ export interface Clue {
   a: string;
   dd?: boolean;
   media?: Media;
+  /** R2 object key for an uploaded file. Absent means show a placeholder. */
+  mediaKey?: string;
   mediaLabel?: string;
 }
+
+/** Uploads are refused above this; Workers cap a request body at 100 MB anyway. */
+export const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 
 export interface Category {
   id?: string;
@@ -236,12 +241,14 @@ export function parseGame(raw: unknown): Game | null {
     for (let i = 0; i < ROWS; i++) {
       const q = (c?.clues ?? [])[i] as Partial<Clue> | undefined;
       const media = q?.media === "image" || q?.media === "video" ? q.media : undefined;
+      const mediaKey = typeof q?.mediaKey === "string" && q.mediaKey ? q.mediaKey : undefined;
       clues.push({
         id: typeof q?.id === "string" && q.id ? q.id : newId(),
         t: String(q?.t ?? ""),
         a: String(q?.a ?? ""),
         ...(q?.dd ? { dd: true as const } : {}),
         ...(media ? { media, mediaLabel: String(q?.mediaLabel ?? "") } : {}),
+        ...(media && mediaKey ? { mediaKey } : {}),
       });
     }
     return {
@@ -299,7 +306,8 @@ export type BoardOp =
   | { type: "catMove"; catId: string; dir: -1 | 1 }
   | { type: "clueText"; catId: string; row: number; field: "t" | "a" | "mediaLabel"; value: string }
   | { type: "clueDD"; catId: string; row: number; value: boolean }
-  | { type: "clueMedia"; catId: string; row: number; value: Media | null }
+  /** `key` present means a real uploaded file; absent means a placeholder. */
+  | { type: "clueMedia"; catId: string; row: number; value: Media | null; key?: string | null }
   | { type: "clueClear"; catId: string; row: number }
   /** Wholesale swap — JSON import, or blanking the board. */
   | { type: "replace"; game: Game };
@@ -406,8 +414,11 @@ export function applyBoardOp(game: Game, op: BoardOp): Game {
         if (op.value) {
           next.media = op.value;
           next.mediaLabel = clue.mediaLabel ?? "";
+          if (op.key) next.mediaKey = op.key;
+          else if (op.key === null) delete next.mediaKey; // switched back to a placeholder
         } else {
           delete next.media;
+          delete next.mediaKey;
           delete next.mediaLabel;
         }
         return next;

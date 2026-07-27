@@ -149,9 +149,38 @@ npx vercel --prod
   `/boards/:code` for the host console, which only ever wants a whole board. A
   PUT also broadcasts, so an outside overwrite reaches anyone with it open.
 
+## Clue media
+
+Clues can carry a real image or video. Upload one in the editor and it appears
+on the TV when that clue opens, with a thumbnail on the host console so the host
+knows what the room is looking at.
+
+Files live in **R2**, streamed through the Worker — `POST /upload/:code/:clueId`
+to store, `GET /media/:key` to serve. R2 rather than a blob host because egress
+is free, which matters when a room reloads the same clip.
+
+- Up to **50 MB** per file. Workers cap a request body at 100 MB regardless.
+- Keys are `boards/<code>/<clueId>/<random>.<ext>`. The random segment means
+  replacing a clue's media can never serve a stale cached file, so responses are
+  `immutable` with a one-year max-age.
+- **Range requests are supported**, so video scrubbing works.
+- Uploads need a saved board, since keys are scoped to its code. The editor says
+  so rather than failing oddly if you try from an unsaved draft.
+- The size ceiling is enforced twice: on `content-length`, and again while
+  reading, because a chunked upload declares no length at all.
+
+R2 must be enabled once from the Cloudflare dashboard, then:
+
+```bash
+npx wrangler r2 bucket create guardian-jeopardy-media
+```
+
 ## Not built yet
 
-- Daily Double and final-round media (image/video) are carried in the data and
-  badged, but the TV renders a placeholder rather than real media.
+- **Orphaned media is never collected.** Replacing or removing a clue's file
+  leaves the old object in R2. Harmless at this scale, but there is no sweeper.
+- Video autoplays with `controls` as a fallback; browsers may block autoplay
+  with sound until someone interacts with the TV page.
 - No board browsing or search — codes are the only way in, by design.
-- No auth: anyone with a board code can overwrite that board.
+- No auth: anyone with a board code can overwrite it, edit it live, or upload
+  media to it.

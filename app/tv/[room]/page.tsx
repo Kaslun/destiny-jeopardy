@@ -2,6 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { C, mono, money, tintFor } from "../../../lib/theme";
+import { mediaUrl } from "../../../lib/media";
 import { useRole } from "../../../lib/useRoom";
 import { clueKey, type RoomState } from "../../../shared/protocol";
 
@@ -314,7 +315,40 @@ export default function TvBoard() {
                 padding: "0 clamp(32px,5vw,90px)",
               }}
             >
-              {openClue.media && (
+              {openClue.media && openClue.mediaKey && (
+                <div
+                  style={{
+                    height: "clamp(160px,34vh,420px)",
+                    display: "grid",
+                    placeItems: "center",
+                    background: "#05070c",
+                    border: `1px solid #2a3244`,
+                    overflow: "hidden",
+                  }}
+                >
+                  {openClue.media === "video" ? (
+                    <video
+                      // Re-keyed per clue so opening a new one starts its own clip
+                      // rather than leaving the previous video mounted.
+                      key={openClue.mediaKey}
+                      src={mediaUrl(openClue.mediaKey)}
+                      autoPlay
+                      controls
+                      playsInline
+                      style={{ maxWidth: "100%", maxHeight: "100%" }}
+                    />
+                  ) : (
+                    <img
+                      key={openClue.mediaKey}
+                      src={mediaUrl(openClue.mediaKey)}
+                      alt={openClue.mediaLabel || ""}
+                      style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+                    />
+                  )}
+                </div>
+              )}
+
+              {openClue.media && !openClue.mediaKey && (
                 <div
                   style={{
                     height: "clamp(140px,26vh,330px)",

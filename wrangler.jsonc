@@ -19,6 +19,14 @@
       }
     ]
   },
+  "r2_buckets": [
+    {
+      // Clue images and video. R2 rather than a blob host because egress is
+      // free, which matters when a room full of people loads the same clip.
+      "binding": "MEDIA",
+      "bucket_name": "guardian-jeopardy-media"
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",

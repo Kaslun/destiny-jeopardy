@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { C, mono } from "../lib/theme";
 import { loadBoard, myBoards, rememberBoard, saveBoard, type BoardRef } from "../lib/boards";
 import { storeEditorName, storedEditorName, useBoard } from "../lib/useBoard";
+import { mediaLimitLabel, mediaUrl, uploadMedia } from "../lib/media";
 import {
   applyBoardOp,
   MAX_CATS,
@@ -47,6 +48,8 @@ export default function Editor({ slug }: { slug?: string }) {
   const [ioText, setIoText] = useState("");
   const [boards, setBoards] = useState<BoardRef[]>([]);
   const [armed, setArmed] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadPct, setUploadPct] = useState(0);
 
   const live = useBoard(slug ?? null, name);
   const collaborative = !!slug;
@@ -148,6 +151,34 @@ export default function Editor({ slug }: { slug?: string }) {
     } catch (err) {
       setNote({ text: (err as Error).message.toUpperCase(), ok: false });
       setBusy(false);
+    }
+  };
+
+  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // let the same file be picked again after a failure
+    if (!file) return;
+
+    // Uploads are stored under the board's code, so a draft has nowhere to put
+    // them yet. Saying so beats a confusing failure.
+    if (!slug) {
+      setNote({ text: "SAVE & SHARE THIS BOARD FIRST — UPLOADS ARE STORED AGAINST ITS CODE", ok: false });
+      return;
+    }
+    const clueId = selClue.id;
+    if (!clueId) return;
+
+    setUploading(true);
+    setUploadPct(0);
+    try {
+      const up = await uploadMedia(slug, clueId, file, setUploadPct);
+      emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: up.media, key: up.key });
+      setNote({ text: `UPLOADED ${file.name.toUpperCase()}`, ok: true });
+    } catch (err) {
+      setNote({ text: (err as Error).message.toUpperCase(), ok: false });
+    } finally {
+      setUploading(false);
+      setUploadPct(0);
     }
   };
 
@@ -512,30 +543,96 @@ export default function Editor({ slug }: { slug?: string }) {
           </button>
 
           <Field label="MEDIA ON THE TV">
-            <div style={{ display: "flex", gap: 6 }}>
-              {([["", "NONE"], ["image", "IMAGE"], ["video", "VIDEO"]] as const).map(([key, label]) => (
-                <button
-                  key={label}
-                  onClick={() => emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: key === "" ? null : key })}
+            {selClue.mediaKey ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <div
                   style={{
-                    ...btn,
-                    flex: 1,
-                    fontSize: 10,
-                    color: media === key ? "#0a0d14" : C.dim,
-                    background: media === key ? C.gold : "#141b28",
-                    borderColor: media === key ? C.gold : "#26303f",
+                    border: `1px solid ${C.line}`,
+                    background: "#05070c",
+                    display: "grid",
+                    placeItems: "center",
+                    height: 128,
+                    overflow: "hidden",
                   }}
                 >
-                  {label}
-                </button>
-              ))}
-            </div>
+                  {selClue.media === "video" ? (
+                    <video
+                      src={mediaUrl(selClue.mediaKey)}
+                      controls
+                      preload="metadata"
+                      style={{ maxWidth: "100%", maxHeight: "100%" }}
+                    />
+                  ) : (
+                    <img
+                      src={mediaUrl(selClue.mediaKey)}
+                      alt=""
+                      style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+                    />
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <label style={{ ...btn, flex: 1, textAlign: "center", cursor: "pointer" }}>
+                    ⟳ REPLACE
+                    <input type="file" accept="image/*,video/*" hidden onChange={onPickFile} />
+                  </label>
+                  <button
+                    onClick={() => emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: null })}
+                    style={{ ...btn, flex: 1, color: C.orange }}
+                  >
+                    ✕ REMOVE
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <label
+                  style={{
+                    ...btn,
+                    textAlign: "center",
+                    cursor: uploading ? "progress" : "pointer",
+                    borderStyle: "dashed",
+                    borderColor: uploading ? C.gold : "#2f3a4f",
+                    padding: "14px",
+                  }}
+                >
+                  {uploading ? `UPLOADING ${Math.round(uploadPct * 100)}%` : "⬆ UPLOAD IMAGE OR VIDEO"}
+                  <input type="file" accept="image/*,video/*" hidden disabled={uploading} onChange={onPickFile} />
+                </label>
+                {uploading && (
+                  <div style={{ height: 4, background: "#0f141d", border: `1px solid ${C.line}` }}>
+                    <div style={{ height: "100%", width: `${uploadPct * 100}%`, background: C.gold }} />
+                  </div>
+                )}
+                <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".12em", color: C.faint }}>
+                  UP TO {mediaLimitLabel()} · OR JUST MARK A PLACEHOLDER:
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {([["", "NONE"], ["image", "IMAGE"], ["video", "VIDEO"]] as const).map(([key, label]) => (
+                    <button
+                      key={label}
+                      onClick={() => emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: key === "" ? null : key })}
+                      style={{
+                        ...btn,
+                        flex: 1,
+                        fontSize: 10,
+                        color: media === key ? "#0a0d14" : C.dim,
+                        background: media === key ? C.gold : "#141b28",
+                        borderColor: media === key ? C.gold : "#26303f",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {media && (
               <Synced
                 key={`${selCatId}:${sel.r}:m`}
                 value={selClue.mediaLabel ?? ""}
                 onCommit={(v) => emit({ type: "clueText", catId: selCatId, row: sel.r, field: "mediaLabel", value: v })}
-                placeholder="[ DROP FILE HERE ]"
+                placeholder="CAPTION (OPTIONAL)"
                 style={{ ...input, fontFamily: mono, fontSize: 11, marginTop: 6 }}
               />
             )}
