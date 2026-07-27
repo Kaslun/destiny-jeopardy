@@ -692,7 +692,7 @@ const EDITOR_COLORS = ["#7fd8f0", "#f0c469", "#8fd98a", "#b18cf0", "#f0803c", "#
 // routes need CORS. The WebSocket upgrade does not.
 const CORS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET,PUT,OPTIONS",
+  "access-control-allow-methods": "GET,HEAD,POST,PUT,OPTIONS",
   "access-control-allow-headers": "content-type",
 };
 
@@ -863,9 +863,12 @@ export default {
       return stub.fetch(new Request(url.origin + "/", request));
     }
 
+    // The fallback carries CORS too. Without it the browser blocks the response
+    // and the caller sees an opaque network error instead of a plain 404 —
+    // which is exactly what a stale deploy missing a route looks like.
     return (
       (await routePartykitRequest(request, env)) ??
-      new Response("guardian-jeopardy room server", { status: 404 })
+      json({ error: `no route for ${request.method} ${url.pathname}` }, 404)
     );
   },
 };
