@@ -11,9 +11,9 @@
  * incremental patches invite.
  */
 
-import { DurableObject } from "cloudflare:workers";
 import { Server, routePartykitRequest, type Connection, type WSMessage } from "partyserver";
 import {
+  applyBoardOp,
   clueKey,
   emptyRoom,
   finalBounds,
@@ -21,8 +21,12 @@ import {
   isSlug,
   parseGame,
   wagerBounds,
+  type BoardClientMessage,
+  type BoardServerMessage,
   type ClientMessage,
+  type EditorPresence,
   type FinalEntry,
+  type Game,
   type Role,
   type RoomState,
   type ServerMessage,
@@ -517,13 +521,111 @@ export class JeopardyRoom extends Server<Env> {
  * Boards are addressed by slug rather than listed. Anyone with the slug can
  * load it — that is the sharing mechanism — and the editor keeps its own local
  * index of the ones you made, since there is no cross-object listing.
+ *
+ * It is also the collaboration server. Editors connect over WebSocket and send
+ * operations; this object owns the document, applies them in arrival order, and
+ * broadcasts the result. Because it is a single object per board, "arrival
+ * order" is a real total order — there is no second writer to reconcile with.
+ * The plain GET/PUT API stays for the host console, which only ever wants a
+ * whole board.
  */
-export class BoardStore extends DurableObject<Env> {
-  async fetch(request: Request): Promise<Response> {
+export class BoardStore extends Server<Env> {
+  static options = { hibernate: false };
+
+  #game: Game | null = null;
+  #presence = new Map<string, EditorPresence>();
+  #loaded = false;
+
+  async onStart() {
+    this.#game = (await this.ctx.storage.get<Game>("game")) ?? null;
+    this.#loaded = true;
+  }
+
+  async #ready() {
+    if (!this.#loaded) {
+      this.#game = (await this.ctx.storage.get<Game>("game")) ?? null;
+      this.#loaded = true;
+    }
+  }
+
+  async onConnect(conn: Connection) {
+    await this.#ready();
+    if (!this.#game) {
+      conn.send(JSON.stringify({ type: "error", message: "no board with that code" }));
+      conn.close(1008, "unknown board");
+      return;
+    }
+    this.#presence.set(conn.id, {
+      id: conn.id,
+      name: "EDITOR",
+      color: EDITOR_COLORS[this.#presence.size % EDITOR_COLORS.length],
+      focus: null,
+    });
+    conn.send(
+      JSON.stringify({
+        type: "board",
+        game: this.#game,
+        editors: this.#editors(),
+        you: conn.id,
+      } satisfies BoardServerMessage),
+    );
+    this.#broadcastEditors();
+  }
+
+  async onClose(conn: Connection) {
+    this.#presence.delete(conn.id);
+    this.#broadcastEditors();
+  }
+
+  async onMessage(conn: Connection, raw: WSMessage) {
+    await this.#ready();
+    if (typeof raw !== "string" || !this.#game) return;
+
+    let msg: BoardClientMessage;
+    try {
+      msg = JSON.parse(raw) as BoardClientMessage;
+    } catch {
+      return;
+    }
+
+    const me = this.#presence.get(conn.id);
+    if (!me) return;
+
+    if (msg.type === "hello") {
+      me.name = String(msg.name).slice(0, 24) || "EDITOR";
+      this.#broadcastEditors();
+      return;
+    }
+
+    if (msg.type === "focus") {
+      me.focus = msg.focus ?? null;
+      this.#broadcastEditors();
+      return;
+    }
+
+    if (msg.type === "op") {
+      const next = applyBoardOp(this.#game, msg.op);
+      if (next === this.#game) return; // op was a no-op; don't churn everyone
+      this.#game = msg.op.type === "replace" ? (parseGame(next) ?? this.#game) : next;
+      await this.#persist();
+      this.broadcast(
+        JSON.stringify({
+          type: "board",
+          game: this.#game,
+          editors: this.#editors(),
+          you: "",
+        } satisfies BoardServerMessage),
+      );
+    }
+  }
+
+  /** Plain HTTP, for the host console and for creating a board from a draft. */
+  async onRequest(request: Request): Promise<Response> {
+    await this.#ready();
+
     if (request.method === "GET") {
-      const game = await this.ctx.storage.get<unknown>("game");
-      if (!game) return json({ error: "no board with that code" }, 404);
-      return json({ game });
+      if (!this.#game) return json({ error: "no board with that code" }, 404);
+      return json({ game: this.#game });
     }
 
     if (request.method === "PUT") {
@@ -535,14 +637,40 @@ export class BoardStore extends DurableObject<Env> {
       }
       const game = parseGame((body as { game?: unknown })?.game ?? body);
       if (!game) return json({ error: "that game has no categories" }, 400);
-      await this.ctx.storage.put("game", game);
-      await this.ctx.storage.put("savedAt", Date.now());
+      this.#game = game;
+      await this.#persist();
+      // Anyone with the board open should see an outside overwrite immediately.
+      this.broadcast(
+        JSON.stringify({
+          type: "board",
+          game,
+          editors: this.#editors(),
+          you: "",
+        } satisfies BoardServerMessage),
+      );
       return json({ ok: true, game });
     }
 
     return json({ error: "method not allowed" }, 405);
   }
+
+  #editors(): EditorPresence[] {
+    return [...this.#presence.values()];
+  }
+
+  #broadcastEditors() {
+    this.broadcast(
+      JSON.stringify({ type: "editors", editors: this.#editors() } satisfies BoardServerMessage),
+    );
+  }
+
+  async #persist() {
+    await this.ctx.storage.put("game", this.#game);
+    await this.ctx.storage.put("savedAt", Date.now());
+  }
 }
+
+const EDITOR_COLORS = ["#7fd8f0", "#f0c469", "#8fd98a", "#b18cf0", "#f0803c", "#ff8fb0"];
 
 // The app is served from a different origin than this Worker, so the board
 // routes need CORS. The WebSocket upgrade does not.

@@ -10,6 +10,7 @@ Three live surfaces plus a board editor:
 | `/host/[room]` | The host        | Loads the game, opens clues, rules on buzzes, scores  |
 | `/play/[room]` | Each player     | Name entry, then one big buzzer                       |
 | `/edit`        | The author      | Build a board, save it for a code                     |
+| `/edit/[code]` | Authors, plural | The same board, edited by several people at once      |
 | `/design/`     | Reference       | The original design doc                               |
 
 ## Architecture
@@ -43,14 +44,39 @@ design/         the original design doc + board editor
 
 ## Authoring a game
 
-Build a board at **`/edit`** and hit save. You get a short **board code**; type
-that into the host console and the game loads. Boards live on the server (one
-Durable Object per code), so a code is all anyone needs to run your game.
+Build a board at **`/edit`** and hit **Save & share**. You get a short **board
+code**; type that into the host console and the game loads. Boards live on the
+server (one Durable Object per code), so a code is all anyone needs.
 
-The editor autosaves a working draft to `localStorage`, so unsaved work survives
-a refresh. It also keeps a local list of the codes you created — there is no
-cross-object listing on the server, so losing that list loses the index, not the
-boards. Import/export as JSON is still there for moving games between browsers.
+**`/edit/[code]` is collaborative.** Send someone the URL and you edit the same
+board together, live. Everyone's name and colour show in the header, the cell
+each person is looking at is ringed in their colour, and the inspector warns you
+when someone else is in the clue you just opened. There is no save button — the
+server owns the document and every change is persisted as it happens.
+
+`/edit` with no code is a private local draft in `localStorage`. It only reaches
+the server, and becomes collaborative, when you save it. The editor also keeps a
+local list of codes you created; there is no cross-object listing on the server,
+so losing that list loses the index, not the boards. Import/export as JSON still
+works in both modes.
+
+### How concurrent edits are resolved
+
+Edits travel as small **operations** — "set the answer of clue X", "rename
+category Y" — not whole documents, and every operation addresses categories and
+clues by a **stable id** rather than a position. The board object applies them in
+arrival order, which is a real total order because there is exactly one object
+per board.
+
+That means two people on different clues both land, and even the clue text and
+its answer can be edited at the same time. Deleting or reordering a category
+cannot misdirect someone else's keystrokes into the wrong cell, and an operation
+aimed at a category that has just been deleted is dropped rather than throwing.
+
+Two people typing in the **same field** is last-write-wins. That is a deliberate
+limit: merging characters inside one clue needs a CRDT, which is a lot of machinery
+for a six-by-five grid. Presence is the mitigation — you can see someone is in
+there before you start.
 
 The original design doc lives at `design/Guardian Jeopardy.dc.html` and is
 published to `/design/` by `npm run build`. It is the visual reference; the
@@ -118,6 +144,10 @@ npx vercel --prod
   wager is in. Reveal order is lowest score first, so the leader lands last.
 - **Board routes need CORS** (`/boards/:slug`), since the app is served from a
   different origin than the Worker. The WebSocket upgrade does not.
+- **`BoardStore` serves both protocols.** WebSockets at
+  `/parties/board-store/:code` for collaborative editing, and plain GET/PUT at
+  `/boards/:code` for the host console, which only ever wants a whole board. A
+  PUT also broadcasts, so an outside overwrite reaches anyone with it open.
 
 ## Not built yet
 
