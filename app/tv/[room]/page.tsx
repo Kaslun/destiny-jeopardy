@@ -2,6 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { C, mono, money, tintFor } from "../../../lib/theme";
+import { Score } from "../../../components/Score";
 import { mediaUrl } from "../../../lib/media";
 import { useSound } from "../../../lib/sound";
 import { useCountdown } from "../../../lib/useCountdown";
@@ -152,7 +153,10 @@ export default function TvBoard() {
                   }}
                 >
                   {spent ? (
-                    <div style={{ width: 22, height: 22, border: `1px solid ${C.line}`, transform: "rotate(45deg)" }} />
+                    <div
+                      className="anim-pop"
+                      style={{ width: 22, height: 22, border: `1px solid ${C.line}`, transform: "rotate(45deg)" }}
+                    />
                   ) : (
                     <div
                       style={{
@@ -218,16 +222,10 @@ export default function TvBoard() {
               </div>
             </div>
             <div style={{ flex: 1 }} />
-            <div
-              style={{
-                fontFamily: mono,
-                fontSize: "clamp(16px,1.9vw,38px)",
-                fontWeight: 600,
-                color: p.score < 0 ? C.orange : C.text,
-              }}
-            >
-              {money(p.score)}
-            </div>
+            <Score
+              value={p.score}
+              style={{ fontFamily: mono, fontSize: "clamp(16px,1.9vw,38px)", fontWeight: 600 }}
+            />
           </div>
         ))}
       </div>
@@ -236,6 +234,7 @@ export default function TvBoard() {
           wagering player can see it — so the TV shows only the stakes. */}
       {open && phase === "wager" && dd && (
         <div
+          className="anim-dd"
           style={{
             position: "absolute",
             inset: 0,
@@ -289,6 +288,8 @@ export default function TvBoard() {
 
       {open && openClue && phase !== "wager" && (
         <div
+          key={`${open.c}-${open.r}`}
+          className="anim-clue"
           style={{
             position: "absolute",
             inset: 0,
@@ -328,11 +329,15 @@ export default function TvBoard() {
             </div>
             <div style={{ flex: 1 }} />
             <div
+              // Pulses through the last five seconds, so the room feels the
+              // clock running out without staring at the number.
+              className={timed && !timer.expired && timer.remaining <= 5 ? "anim-urgent" : undefined}
               style={{
                 fontFamily: mono,
                 fontSize: 28,
                 fontWeight: 600,
                 fontVariantNumeric: "tabular-nums",
+                transition: "color .2s var(--snap)",
                 color: !timed ? "#3d4a63" : timer.expired ? C.orange : timer.remaining <= 5 ? C.gold : "#6d7791",
               }}
             >
@@ -482,6 +487,7 @@ export default function TvBoard() {
               {!dd && buzzes.map((b, i) => (
                 <div
                   key={b.playerId}
+                  className="anim-row"
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -490,6 +496,8 @@ export default function TvBoard() {
                     background: i === 0 ? "rgba(240,196,105,.12)" : "rgba(255,255,255,.025)",
                     border: `1px solid ${i === 0 ? C.goldDeep : C.line}`,
                     clipPath: "polygon(0 0,100% 0,100% 70%,95% 100%,0 100%)",
+                    // Each entry lands after the one above it.
+                    animationDelay: `${i * 60}ms`,
                   }}
                 >
                   <div
@@ -617,6 +625,7 @@ function FinalBoard({ state }: { state: RoomState }) {
             return (
               <div
                 key={id}
+                className={active ? "anim-row" : undefined}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -625,6 +634,8 @@ function FinalBoard({ state }: { state: RoomState }) {
                   background: active ? "rgba(240,196,105,.12)" : "rgba(255,255,255,.03)",
                   border: `1px solid ${active ? C.gold : C.line}`,
                   opacity: shown || active ? 1 : 0.45,
+                  transform: active ? "scale(1.015)" : "none",
+                  transition: "opacity .3s var(--snap), background .3s var(--snap), border-color .3s var(--snap), transform .2s var(--snap)",
                 }}
               >
                 <div style={{ fontSize: "clamp(15px,1.5vw,26px)", fontWeight: 600, width: "22%", minWidth: 0 }}>
@@ -667,8 +678,28 @@ function FinalBoard({ state }: { state: RoomState }) {
           <div style={{ fontFamily: mono, fontSize: "clamp(10px,.9vw,14px)", letterSpacing: ".3em", color: C.dim }}>
             WINNER
           </div>
-          <div style={{ fontSize: "clamp(28px,3.6vw,60px)", fontWeight: 700, color: C.gold }}>
+          <div
+            className="anim-dd"
+            style={{
+              position: "relative",
+              overflow: "hidden",
+              fontSize: "clamp(28px,3.6vw,60px)",
+              fontWeight: 700,
+              color: C.gold,
+              padding: "0 6px",
+            }}
+          >
             {state.players.slice().sort((a, b) => b.score - a.score)[0]?.name ?? "—"}
+            {/* One slow pass of light across the winner's name. */}
+            <span
+              aria-hidden
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "linear-gradient(105deg, transparent 35%, rgba(255,255,255,.5) 50%, transparent 65%)",
+                animation: "sheen 1.6s var(--snap) .5s",
+              }}
+            />
           </div>
         </div>
       )}

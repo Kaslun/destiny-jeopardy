@@ -216,6 +216,29 @@ Screens count down locally from when the clue appeared rather than from the
 server's epoch, so a viewer whose system clock is wrong still sees a full,
 correct bar. That display clock never decides the rules.
 
+## Feel
+
+Motion lives in `app/globals.css` as a small set of classes (`tap`, `lift`,
+`tile`, `anim-*`) applied alongside the inline styles, so timing and easing are
+defined once. Nothing runs longer than 400ms except deliberate ambience — a game
+show should feel struck, not eased.
+
+- **Phone**: the buzzer scales under the finger and throws a ring outward, the
+  whole screen warms when you're first, and haptics differ between "your buzz
+  landed" and "you were first" so you can tell them apart without looking.
+- **TV**: clues rise into place, buzz entries land one after another, the clock
+  pulses through its last five seconds, and the winner's name catches a single
+  pass of light.
+- **Host**: press and hover feedback only. It is an instrument, not a spectacle.
+- **Scores count** to their new value everywhere, flashing green up or orange
+  down.
+
+`prefers-reduced-motion` disables all of it, including the count-up.
+
+**Scores never lie to look good.** `requestAnimationFrame` is suspended outright
+in a background tab, so the count-up is backed by a timer that forces the true
+value regardless. The tween is a flourish; the number is the truth.
+
 ## Sound
 
 Cues are **synthesised with WebAudio**, not shipped as files — the game makes

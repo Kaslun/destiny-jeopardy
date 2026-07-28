@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { C, mono, money, tintFor } from "../../../lib/theme";
+import { Score } from "../../../components/Score";
 import { useRole } from "../../../lib/useRoom";
 import { loadBoard } from "../../../lib/boards";
 import { mediaUrl } from "../../../lib/media";
@@ -376,6 +377,7 @@ export default function HostConsole() {
                 {buzzes.map((b, i) => (
                   <div
                     key={b.playerId}
+                    className="anim-row"
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -384,6 +386,8 @@ export default function HostConsole() {
                       background: i === 0 ? "rgba(240,196,105,.12)" : "rgba(255,255,255,.025)",
                       border: `1px solid ${i === 0 ? C.goldDeep : C.line}`,
                       flexWrap: "wrap",
+                      animationDelay: `${i * 50}ms`,
+                      transition: "background .2s var(--snap), border-color .2s var(--snap)",
                     }}
                   >
                     <div style={{ fontFamily: mono, fontSize: 18, fontWeight: 600, color: i === 0 ? C.gold : C.dimmer, width: 22 }}>
@@ -399,12 +403,14 @@ export default function HostConsole() {
                       <div style={{ display: "flex", gap: 8 }}>
                         <button
                           onClick={() => send({ type: "judge", correct: true })}
+                          className="tap lift"
                           style={judgeBtn(C.green)}
                         >
                           ✓ CORRECT +{game.values[open.r]}
                         </button>
                         <button
                           onClick={() => send({ type: "judge", correct: false })}
+                          className="tap lift"
                           style={judgeBtn(C.orange)}
                         >
                           ✕ WRONG −{game.values[open.r]}
@@ -616,6 +622,7 @@ export default function HostConsole() {
                           key={ri}
                           disabled={spent}
                           onClick={() => send({ type: "openClue", c: ci, r: ri })}
+                          className={spent ? undefined : "tile"}
                           style={{
                             padding: "14px 0",
                             fontFamily: mono,
@@ -683,15 +690,13 @@ export default function HostConsole() {
                       {p.connected ? p.cls || "GUARDIAN" : "AWAY"}
                     </div>
                   </div>
-                  <div style={{ fontFamily: mono, fontSize: 22, fontWeight: 600, color: p.score < 0 ? C.orange : C.text }}>
-                    {money(p.score)}
-                  </div>
+                  <Score value={p.score} style={{ fontFamily: mono, fontSize: 22, fontWeight: 600 }} />
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => send({ type: "adjust", playerId: p.id, delta: -100 })} style={tinyBtn}>
+                  <button onClick={() => send({ type: "adjust", playerId: p.id, delta: -100 })} className="tap" style={tinyBtn}>
                     − 100
                   </button>
-                  <button onClick={() => send({ type: "adjust", playerId: p.id, delta: 100 })} style={tinyBtn}>
+                  <button onClick={() => send({ type: "adjust", playerId: p.id, delta: 100 })} className="tap" style={tinyBtn}>
                     + 100
                   </button>
                 </div>

@@ -469,9 +469,11 @@ export default function Editor({ slug }: { slug?: string }) {
                     <button
                       key={q.id ?? ri}
                       onClick={() => setSel({ c: ci, r: ri })}
+                      className="tap"
                       style={{
                         position: "relative",
                         textAlign: "left",
+                        transition: "background .16s var(--snap), border-color .16s var(--snap), transform .11s var(--snap)",
                         padding: "8px 9px",
                         display: "flex",
                         flexDirection: "column",

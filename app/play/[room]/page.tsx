@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { C, mono, money } from "../../../lib/theme";
+import { Score } from "../../../components/Score";
 import { useRole } from "../../../lib/useRoom";
 import { useSound } from "../../../lib/sound";
 import type { FinalEntry, FinalPhase } from "../../../shared/protocol";
@@ -42,9 +43,17 @@ export default function PhoneBuzzer() {
   sound.useCueOn(myBuzz, "buzz");
   sound.useCueOn(iAmFirst, "correct");
 
+  // Distinct haptics: a thump when your buzz lands, a double tap when it turns
+  // out you were first. You can tell them apart without looking.
   useEffect(() => {
-    if (myBuzz && typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(60);
+    if (myBuzz && typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(55);
   }, [myBuzz]);
+  useEffect(() => {
+    if (iAmFirst && typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate([40, 60, 90]);
+  }, [iAmFirst]);
+
+  // Drives the ring that leaves the button on press.
+  const [wave, setWave] = useState(0);
 
   const commitName = () => {
     const next = { name: draft.name.trim().toUpperCase() || "GUARDIAN", cls: draft.cls.trim().toUpperCase() };
@@ -217,14 +226,18 @@ export default function PhoneBuzzer() {
         <div style={{ flex: 1 }} />
         <div style={{ textAlign: "right" }}>
           <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".2em", color: "#8b95ab" }}>SCORE</div>
-          <div style={{ fontFamily: mono, fontSize: 22, fontWeight: 600, color: (me?.score ?? 0) < 0 ? C.orange : C.gold }}>
-            {money(me?.score ?? 0)}
-          </div>
+          <Score
+            value={me?.score ?? 0}
+            positiveColor={C.gold}
+            style={{ fontFamily: mono, fontSize: 22, fontWeight: 600 }}
+          />
         </div>
       </header>
 
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 30, width: "100%" }}>
         <div
+          key={hint}
+          className="anim-pop"
           style={{
             fontFamily: mono,
             fontSize: 11,
@@ -234,15 +247,22 @@ export default function PhoneBuzzer() {
             lineHeight: 1.9,
             minHeight: 40,
             padding: "0 20px",
+            transition: "color .2s var(--snap)",
           }}
         >
           {hint}
         </div>
 
         <button
-          onClick={() => send({ type: "buzz" })}
+          onClick={() => {
+            setWave((n) => n + 1);
+            send({ type: "buzz" });
+          }}
           disabled={!canBuzz}
+          className="tap"
           style={{
+            position: "relative",
+            isolation: "isolate",
             width: "min(74vw, 280px)",
             aspectRatio: "1",
             borderRadius: "50%",
@@ -264,7 +284,28 @@ export default function PhoneBuzzer() {
             opacity: 1,
           }}
         >
-          <div style={{ fontSize: "clamp(28px,11vw,52px)", fontWeight: 700, letterSpacing: ".06em", lineHeight: 1 }}>
+          {/* A ring that leaves the button each press — the press is felt even
+              when the room is loud and the screen is barely glanced at. */}
+          {wave > 0 && (
+            <span
+              key={wave}
+              aria-hidden
+              style={{
+                position: "absolute",
+                inset: -3,
+                borderRadius: "50%",
+                border: `3px solid ${isFirst ? "#ffe0a0" : C.cyan}`,
+                animation: "shockwave .55s var(--snap) forwards",
+                pointerEvents: "none",
+                zIndex: -1,
+              }}
+            />
+          )}
+          <div
+            key={`${isFirst}-${myIndex}`}
+            className="anim-pop"
+            style={{ fontSize: "clamp(28px,11vw,52px)", fontWeight: 700, letterSpacing: ".06em", lineHeight: 1 }}
+          >
             {phase === "live" && dd
               ? ddMine
                 ? money(dd.wager ?? 0)
@@ -671,7 +712,8 @@ function Frame({ children, first }: { children: React.ReactNode; first?: boolean
         display: "grid",
         placeItems: "center",
         padding: "90px 20px",
-        transition: "background .2s",
+        // The whole screen warms when you're first — visible from arm's length.
+        transition: "background .35s var(--snap)",
         background: first
           ? "radial-gradient(90% 60% at 50% 45%, #3a2408, #17100a 70%)"
           : "radial-gradient(120% 70% at 50% 0%, #17203a, #07090f 70%)",
