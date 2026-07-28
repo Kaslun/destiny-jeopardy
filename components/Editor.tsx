@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { C, mono } from "../lib/theme";
 import { loadBoard, myBoards, rememberBoard, saveBoard, type BoardRef } from "../lib/boards";
 import { storeEditorName, storedEditorName, useBoard } from "../lib/useBoard";
-import { mediaLimitLabel, mediaUrl, uploadMedia } from "../lib/media";
+import { mediaLimitLabel, uploadMedia } from "../lib/media";
+import { ClueMedia } from "./ClueMedia";
 import {
   applyBoardOp,
   DEFAULT_CLUE_SECONDS,
@@ -333,22 +334,13 @@ export default function Editor({ slug }: { slug?: string }) {
             <Field label="MEDIA">
               {game.final?.mediaKey ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <div
-                    style={{
-                      border: `1px solid ${C.line}`,
-                      background: "#05070c",
-                      display: "grid",
-                      placeItems: "center",
-                      height: 96,
-                      overflow: "hidden",
-                    }}
-                  >
-                    {game.final.media === "video" ? (
-                      <video src={mediaUrl(game.final.mediaKey)} controls preload="metadata" style={{ maxWidth: "100%", maxHeight: "100%" }} />
-                    ) : (
-                      <img src={mediaUrl(game.final.mediaKey)} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
-                    )}
-                  </div>
+                  <ClueMedia
+                    media={game.final.media ?? "image"}
+                    mediaKey={game.final.mediaKey}
+                    label={game.final.mediaLabel}
+                    height={96}
+                    border={C.line}
+                  />
                   <div style={{ display: "flex", gap: 6 }}>
                     <label style={{ ...btn, flex: 1, textAlign: "center", cursor: "pointer", fontSize: 10 }}>
                       ⟳ REPLACE
@@ -622,31 +614,13 @@ export default function Editor({ slug }: { slug?: string }) {
           <Field label="MEDIA ON THE TV">
             {selClue.mediaKey ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <div
-                  style={{
-                    border: `1px solid ${C.line}`,
-                    background: "#05070c",
-                    display: "grid",
-                    placeItems: "center",
-                    height: 128,
-                    overflow: "hidden",
-                  }}
-                >
-                  {selClue.media === "video" ? (
-                    <video
-                      src={mediaUrl(selClue.mediaKey)}
-                      controls
-                      preload="metadata"
-                      style={{ maxWidth: "100%", maxHeight: "100%" }}
-                    />
-                  ) : (
-                    <img
-                      src={mediaUrl(selClue.mediaKey)}
-                      alt=""
-                      style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-                    />
-                  )}
-                </div>
+                <ClueMedia
+                  media={selClue.media ?? "image"}
+                  mediaKey={selClue.mediaKey}
+                  label={selClue.mediaLabel}
+                  height={128}
+                  border={C.line}
+                />
                 <div style={{ display: "flex", gap: 6 }}>
                   <label style={{ ...btn, flex: 1, textAlign: "center", cursor: "pointer" }}>
                     ⟳ REPLACE

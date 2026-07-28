@@ -3,7 +3,7 @@
 import { useParams } from "next/navigation";
 import { C, mono, money, tintFor } from "../../../lib/theme";
 import { Score } from "../../../components/Score";
-import { mediaUrl } from "../../../lib/media";
+import { ClueMedia } from "../../../components/ClueMedia";
 import { useSound } from "../../../lib/sound";
 import { useCountdown } from "../../../lib/useCountdown";
 import { useRole } from "../../../lib/useRoom";
@@ -370,36 +370,13 @@ export default function TvBoard() {
               }}
             >
               {openClue.media && openClue.mediaKey && (
-                <div
-                  style={{
-                    height: "clamp(160px,34vh,420px)",
-                    display: "grid",
-                    placeItems: "center",
-                    background: "#05070c",
-                    border: `1px solid #2a3244`,
-                    overflow: "hidden",
-                  }}
-                >
-                  {openClue.media === "video" ? (
-                    <video
-                      // Re-keyed per clue so opening a new one starts its own clip
-                      // rather than leaving the previous video mounted.
-                      key={openClue.mediaKey}
-                      src={mediaUrl(openClue.mediaKey)}
-                      autoPlay
-                      controls
-                      playsInline
-                      style={{ maxWidth: "100%", maxHeight: "100%" }}
-                    />
-                  ) : (
-                    <img
-                      key={openClue.mediaKey}
-                      src={mediaUrl(openClue.mediaKey)}
-                      alt={openClue.mediaLabel || ""}
-                      style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
-                    />
-                  )}
-                </div>
+                <ClueMedia
+                  media={openClue.media}
+                  mediaKey={openClue.mediaKey}
+                  label={openClue.mediaLabel}
+                  height="clamp(160px,34vh,420px)"
+                  autoPlay
+                />
               )}
 
               {openClue.media && !openClue.mediaKey && (
@@ -581,23 +558,15 @@ function FinalBoard({ state }: { state: RoomState }) {
         </div>
       )}
 
-      {final.phase !== "wager" && clue?.mediaKey && (
-        <div
-          style={{
-            height: "clamp(140px,28vh,340px)",
-            display: "grid",
-            placeItems: "center",
-            background: "#05070c",
-            border: `1px solid #2a3244`,
-            overflow: "hidden",
-            width: "min(900px, 92%)",
-          }}
-        >
-          {clue.media === "video" ? (
-            <video key={clue.mediaKey} src={mediaUrl(clue.mediaKey)} autoPlay controls playsInline style={{ maxWidth: "100%", maxHeight: "100%" }} />
-          ) : (
-            <img key={clue.mediaKey} src={mediaUrl(clue.mediaKey)} alt={clue.mediaLabel || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
-          )}
+      {final.phase !== "wager" && clue?.mediaKey && clue.media && (
+        <div style={{ width: "min(900px, 92%)" }}>
+          <ClueMedia
+            media={clue.media}
+            mediaKey={clue.mediaKey}
+            label={clue.mediaLabel}
+            height="clamp(140px,28vh,340px)"
+            autoPlay
+          />
         </div>
       )}
 

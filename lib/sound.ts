@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { SOUND_FILES, SOUND_GAIN } from "./sounds.config";
 
 /**
  * Room audio.
@@ -24,10 +25,50 @@ export type Cue =
 
 /** Optional real audio, keyed by cue. Anything set here wins over the synth. */
 const files = new Map<Cue, string>();
+/** Decoded and ready to fire with no network or decode cost at play time. */
+const buffers = new Map<Cue, AudioBuffer>();
+const loading = new Set<Cue>();
 
 export function setSoundFile(cue: Cue, url: string | null): void {
-  if (url) files.set(cue, url);
-  else files.delete(cue);
+  if (url) {
+    files.set(cue, url);
+    void preloadCue(cue);
+  } else {
+    files.delete(cue);
+    buffers.delete(cue);
+  }
+}
+
+/**
+ * Fetch and decode one cue up front.
+ *
+ * Playing via `new Audio(url)` costs a network fetch and a decode on the first
+ * press, which on a buzzer is exactly the wrong place to spend tens of
+ * milliseconds. Decoding once into an AudioBuffer makes every later play
+ * effectively instant.
+ */
+async function preloadCue(cue: Cue): Promise<void> {
+  const url = files.get(cue);
+  const a = audio();
+  if (!url || !a || buffers.has(cue) || loading.has(cue)) return;
+  loading.add(cue);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`[sound] ${cue}: ${url} returned ${res.status} — using the synthesised cue`);
+      return;
+    }
+    buffers.set(cue, await a.decodeAudioData(await res.arrayBuffer()));
+  } catch (err) {
+    console.warn(`[sound] ${cue}: could not load ${url} — using the synthesised cue`, err);
+  } finally {
+    loading.delete(cue);
+  }
+}
+
+/** Warm every configured cue. Safe to call more than once. */
+export function preloadSounds(): void {
+  for (const cue of files.keys()) void preloadCue(cue);
 }
 
 const MUTE_KEY = "guardian-jeopardy/muted";
@@ -51,6 +92,15 @@ function audio(): AudioContext | null {
 export function unlockAudio(): void {
   const a = audio();
   if (a && a.state === "suspended") void a.resume();
+  // The first interaction is also the first moment we can decode, since an
+  // AudioContext cannot exist before it.
+  preloadSounds();
+}
+
+// Anything listed in the config is registered on load; decoding waits for the
+// first interaction, when an AudioContext becomes possible.
+for (const [cue, url] of Object.entries(SOUND_FILES)) {
+  if (url) files.set(cue as Cue, url);
 }
 
 /** A single shaped tone. The building block for everything below. */
@@ -139,16 +189,23 @@ const SYNTH: Record<Cue, (a: AudioContext) => void> = {
 
 export function playCue(cue: Cue): void {
   try {
-    const url = files.get(cue);
-    if (url) {
-      const el = new Audio(url);
-      el.volume = 0.8;
-      void el.play().catch(() => {});
-      return;
-    }
     const a = audio();
     if (!a) return;
     if (a.state === "suspended") void a.resume();
+
+    const buffer = buffers.get(cue);
+    if (buffer) {
+      const src = a.createBufferSource();
+      const vol = a.createGain();
+      src.buffer = buffer;
+      vol.gain.value = SOUND_GAIN[cue] ?? 0.85;
+      src.connect(vol).connect(a.destination);
+      src.start();
+      return;
+    }
+
+    // A file is configured but still decoding: fall through to the synth so the
+    // first press of a session is never silent.
     SYNTH[cue]?.(a);
   } catch {
     // Sound is decoration; never let it break a game.

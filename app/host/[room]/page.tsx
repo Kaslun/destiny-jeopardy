@@ -6,7 +6,7 @@ import { C, mono, money, tintFor } from "../../../lib/theme";
 import { Score } from "../../../components/Score";
 import { useRole } from "../../../lib/useRoom";
 import { loadBoard } from "../../../lib/boards";
-import { mediaUrl } from "../../../lib/media";
+import { ClueMedia } from "../../../components/ClueMedia";
 import { useCountdown } from "../../../lib/useCountdown";
 import { clueKey, parseGame } from "../../../shared/protocol";
 
@@ -253,23 +253,15 @@ export default function HostConsole() {
                           : `${timer.remaining}s`}
                   </div>
                 </div>
-                {openClue.mediaKey && (
-                  <div
-                    style={{
-                      alignSelf: "flex-start",
-                      border: `1px solid ${C.line}`,
-                      background: "#05070c",
-                      maxHeight: 130,
-                      overflow: "hidden",
-                      display: "grid",
-                      placeItems: "center",
-                    }}
-                  >
-                    {openClue.media === "video" ? (
-                      <video src={mediaUrl(openClue.mediaKey)} controls preload="metadata" style={{ maxHeight: 130 }} />
-                    ) : (
-                      <img src={mediaUrl(openClue.mediaKey)} alt="" style={{ maxHeight: 130 }} />
-                    )}
+                {openClue.mediaKey && openClue.media && (
+                  <div style={{ width: 240 }}>
+                    <ClueMedia
+                      media={openClue.media}
+                      mediaKey={openClue.mediaKey}
+                      label={openClue.mediaLabel}
+                      height={130}
+                      border={C.line}
+                    />
                   </div>
                 )}
                 <div style={{ fontSize: 26, fontWeight: 500, lineHeight: 1.35 }}>{openClue.t || "—"}</div>

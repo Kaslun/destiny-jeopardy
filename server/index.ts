@@ -184,6 +184,16 @@ export class JeopardyRoom extends Server<Env> {
         s.timerSeconds = secondsFor(game, clue);
         s.timed = isTimed(clue);
 
+        if (clue.dd && s.players.length === 0) {
+          // Without a player there is nobody to wager, so this would quietly
+          // become an ordinary clue and score nothing. Say so rather than
+          // letting the host wonder why the Daily Double did nothing.
+          this.#send(conn, {
+            type: "error",
+            message: "this is a Daily Double, but nobody has joined yet — it will play as a normal clue",
+          });
+        }
+
         if (clue.dd && s.players.length > 0) {
           // The clue belongs to whoever has control of the board — the last
           // player to answer correctly. With nobody established yet, fall to
