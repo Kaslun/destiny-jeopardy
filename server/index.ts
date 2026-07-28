@@ -19,8 +19,10 @@ import {
   finalBounds,
   finalEligible,
   isSlug,
+  isTimed,
   MAX_MEDIA_BYTES,
   parseGame,
+  secondsFor,
   wagerBounds,
   type BoardClientMessage,
   type BoardServerMessage,
@@ -176,6 +178,11 @@ export class JeopardyRoom extends Server<Env> {
         s.buzzes = [];
         s.spent = [];
         s.revealed = false;
+
+        // Whatever this clue is worth in time — its own setting, else the
+        // board's, else the fallback. Every screen reads it from here.
+        s.timerSeconds = secondsFor(game, clue);
+        s.timed = isTimed(clue);
 
         if (clue.dd && s.players.length > 0) {
           // The clue belongs to whoever has control of the board — the last
@@ -372,6 +379,8 @@ export class JeopardyRoom extends Server<Env> {
         e.locked = false; // reused for "has committed a response"
       }
       final.phase = "clue";
+      s.timerSeconds = secondsFor(s.game, s.game?.final ?? null);
+      s.timed = isTimed(s.game?.final ?? null);
       s.openedAt = Date.now();
       return;
     }
@@ -406,6 +415,10 @@ export class JeopardyRoom extends Server<Env> {
     const s = this.#state;
     if (!meta.playerId || !s.open || s.openedAt === null) return;
     if (s.phase !== "buzz") return; // a Daily Double is nobody else's to take
+    // Time is up: the buzzer closes. Checked here rather than on a timer, so
+    // there is no window where a late buzz slips in before an alarm fires.
+    // An untimed clue never closes — the host decides when to move on.
+    if (s.timed && Date.now() - s.openedAt > s.timerSeconds * 1000) return;
     if (s.spent.includes(meta.playerId)) return; // already got it wrong
     if (s.buzzes.some((b) => b.playerId === meta.playerId)) return; // double tap
     if (s.lockout === "first-only" && s.buzzes.length > 0) return; // room is locked
@@ -537,6 +550,7 @@ export class BoardStore extends Server<Env> {
   #game: Game | null = null;
   #presence = new Map<string, EditorPresence>();
   #loaded = false;
+  #lastSweep = 0;
 
   async onStart() {
     await this.#load();
@@ -562,6 +576,9 @@ export class BoardStore extends Server<Env> {
     const needsIds = stored.categories.some((c) => !c.id || c.clues.some((q) => !q.id));
     this.#game = needsIds ? (parseGame(stored) ?? stored) : stored;
     if (needsIds && this.#game) await this.#persist();
+
+    // Not awaited: nobody should wait on housekeeping to open a board.
+    void this.#sweepOrphans();
   }
 
   async onConnect(conn: Connection) {
@@ -586,6 +603,9 @@ export class BoardStore extends Server<Env> {
       } satisfies BoardServerMessage),
     );
     this.#broadcastEditors();
+
+    // Opening a board is a natural moment to tidy up behind it.
+    void this.#sweepOrphans();
   }
 
   async onClose(conn: Connection) {
@@ -622,8 +642,10 @@ export class BoardStore extends Server<Env> {
     if (msg.type === "op") {
       const next = applyBoardOp(this.#game, msg.op);
       if (next === this.#game) return; // op was a no-op; don't churn everyone
+      const before = mediaKeysIn(this.#game);
       this.#game = msg.op.type === "replace" ? (parseGame(next) ?? this.#game) : next;
       await this.#persist();
+      await this.#dropOrphans(before);
       this.broadcast(
         JSON.stringify({
           type: "board",
@@ -653,8 +675,10 @@ export class BoardStore extends Server<Env> {
       }
       const game = parseGame((body as { game?: unknown })?.game ?? body);
       if (!game) return json({ error: "that game has no categories" }, 400);
+      const before = mediaKeysIn(this.#game);
       this.#game = game;
       await this.#persist();
+      await this.#dropOrphans(before);
       // Anyone with the board open should see an outside overwrite immediately.
       this.broadcast(
         JSON.stringify({
@@ -668,6 +692,63 @@ export class BoardStore extends Server<Env> {
     }
 
     return json({ error: "method not allowed" }, 405);
+  }
+
+  /**
+   * Files belonging to this board. Media is only ever deleted from under this
+   * prefix, so a board that imported another board's JSON — and therefore
+   * points at someone else's files — can never delete them.
+   */
+  #prefix(): string {
+    return `boards/${this.name}/`;
+  }
+
+  /**
+   * Delete whatever the document stopped pointing at.
+   *
+   * Diffing references before and after a change catches every route a file can
+   * be dropped by — removed, replaced, the clue cleared, switched back to a
+   * placeholder, its category deleted, or the whole board replaced by an import
+   * — without each of those having to remember to clean up after itself.
+   */
+  async #dropOrphans(before: Set<string>) {
+    const after = mediaKeysIn(this.#game);
+    const gone = [...before].filter((key) => !after.has(key) && key.startsWith(this.#prefix()));
+    if (!gone.length) return;
+    try {
+      await this.env.MEDIA.delete(gone);
+    } catch (err) {
+      // A failed delete costs storage, not correctness — never fail the edit.
+      console.error("[media] could not delete orphans", err);
+    }
+  }
+
+  /**
+   * Catch files no diff could have seen: uploads whose attaching edit never
+   * arrived, and anything orphaned before this cleanup existed. The age guard
+   * is what makes it safe — a file uploaded seconds ago may simply be waiting
+   * for its operation to land.
+   */
+  async #sweepOrphans() {
+    // Throttled rather than tied to cold starts alone: this object stays warm
+    // for as long as anyone has the board open, so a load-only sweep would
+    // almost never run during the session where the orphans are created.
+    if (Date.now() - this.#lastSweep < SWEEP_THROTTLE_MS) return;
+    this.#lastSweep = Date.now();
+    try {
+      const referenced = mediaKeysIn(this.#game);
+      const cutoff = Date.now() - ORPHAN_GRACE_MS;
+      const listed = await this.env.MEDIA.list({ prefix: this.#prefix() });
+      const stale = listed.objects
+        .filter((o) => !referenced.has(o.key) && o.uploaded.getTime() < cutoff)
+        .map((o) => o.key);
+      if (stale.length) {
+        await this.env.MEDIA.delete(stale);
+        console.info(`[media] swept ${stale.length} orphaned file(s) from ${this.#prefix()}`);
+      }
+    } catch (err) {
+      console.error("[media] sweep failed", err);
+    }
   }
 
   #editors(): EditorPresence[] {
@@ -687,6 +768,24 @@ export class BoardStore extends Server<Env> {
 }
 
 const EDITOR_COLORS = ["#7fd8f0", "#f0c469", "#8fd98a", "#b18cf0", "#f0803c", "#ff8fb0"];
+
+/** Every media file the document currently points at, the final clue included. */
+function mediaKeysIn(game: Game | null): Set<string> {
+  const keys = new Set<string>();
+  if (!game) return keys;
+  for (const cat of game.categories) {
+    for (const clue of cat.clues) {
+      if (clue.mediaKey) keys.add(clue.mediaKey);
+    }
+  }
+  if (game.final?.mediaKey) keys.add(game.final.mediaKey);
+  return keys;
+}
+
+/** An upload is only considered abandoned once it is this old. */
+const ORPHAN_GRACE_MS = 60 * 60 * 1000;
+/** Don't re-list the bucket on every connect during a busy editing session. */
+const SWEEP_THROTTLE_MS = 5 * 60 * 1000;
 
 // The app is served from a different origin than this Worker, so the board
 // routes need CORS. The WebSocket upgrade does not.
@@ -872,3 +971,4 @@ export default {
     );
   },
 };
+

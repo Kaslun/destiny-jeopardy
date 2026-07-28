@@ -175,12 +175,104 @@ R2 must be enabled once from the Cloudflare dashboard, then:
 npx wrangler r2 bucket create guardian-jeopardy-media
 ```
 
+### Cleaning up files
+
+The board diffs its own media references after every change and deletes whatever
+it stopped pointing at. That covers all seven ways a reference can disappear —
+removed, replaced, the clue cleared, switched back to a placeholder, its category
+deleted, the board replaced by a JSON import, or blanked — without each of those
+having to remember to clean up after itself.
+
+Two rules keep it safe:
+
+- **Only files under the board's own `boards/<code>/` prefix are ever deleted**,
+  so a board that imported another board's JSON can never delete files it does
+  not own.
+- A **sweep** on load and on connect (throttled) catches what no diff could see:
+  uploads whose attaching edit never arrived. It only removes unreferenced files
+  older than an hour, because a file uploaded seconds ago may just be waiting for
+  its operation to land.
+
+## Clue timers
+
+Each clue is one of three things, set in the editor:
+
+| Setting | Behaviour |
+| --- | --- |
+| Timed, no seconds given | Uses the board default |
+| Timed, seconds given | Uses that, clamped to 5–300 |
+| **Timer off** | No clock at all; buzzers stay open until the host closes it |
+
+Duration resolves clue → board → 20 seconds. Untimed clues are marked `∞` on the
+editor grid and on the TV, so you can see at a glance which ones run long — handy
+for a clue built around a video.
+
+**When time runs out the buzzer closes.** The server refuses late buzzes using
+its own clock, checked on arrival rather than on a timer, so there is no window
+where a late buzz slips through. The clue stays open — the host still decides
+when to reveal and move on. An untimed clue never closes its buzzer.
+
+Screens count down locally from when the clue appeared rather than from the
+server's epoch, so a viewer whose system clock is wrong still sees a full,
+correct bar. That display clock never decides the rules.
+
+## Sound
+
+Cues are **synthesised with WebAudio**, not shipped as files — the game makes
+noise with no assets to host, nothing to license, and nothing extra to download
+onto a phone.
+
+- The **TV is the room's speaker**: clue open, Daily Double, buzz, reveal, final
+  clue, and time-up.
+- **Phones only confirm your own actions** — your buzz, and being first. A room
+  of phones echoing the TV would be chaos. They vibrate too, where supported.
+- The **host console stays silent**; it sits next to the TV.
+- Mute is a toggle on the TV and persists per browser.
+
+Browsers refuse to start audio before the user interacts with the page, so the
+first click or key press anywhere unlocks it. On a TV left untouched, press the
+mute button once.
+
+Swapping in real recordings needs no new plumbing:
+
+```ts
+import { setSoundFile } from "@/lib/sound";
+setSoundFile("buzz", "/sounds/buzz.mp3"); // anything set here wins over the synth
+```
+
 ## Not built yet
 
-- **Orphaned media is never collected.** Replacing or removing a clue's file
-  leaves the old object in R2. Harmless at this scale, but there is no sweeper.
-- Video autoplays with `controls` as a fallback; browsers may block autoplay
-  with sound until someone interacts with the TV page.
-- No board browsing or search — codes are the only way in, by design.
-- No auth: anyone with a board code can overwrite it, edit it live, or upload
-  media to it.
+### Gameplay
+
+- **No second round.** There is no Double Jeopardy: no round concept and no
+  value doubling. Today you would build round two as a separate board.
+- **The host drives the board.** Players cannot pick their own clue from their
+  phone, which is how board control works on the show.
+- **The timer starts when the clue opens**, not when the host finishes reading
+  it. Longer clues want a longer setting.
+
+### Media
+
+- **Video autoplay may be blocked** until someone interacts with the TV page.
+  `controls` is the fallback. A host-driven "play on TV" control would fix it
+  properly.
+
+### Boards
+
+- **No auth.** Anyone with a board code can load it, overwrite it, edit it live,
+  or upload media to it.
+- **No way to delete a board.** `/boards/:code` has no DELETE, so a board and its
+  media live forever once created.
+- **No browsing or search** — codes are the only way in. Deliberate.
+
+### Collaboration
+
+- **Two people in the same field is last-write-wins.** Deliberate: merging
+  characters inside one clue needs a CRDT. Presence is the mitigation.
+
+### Elsewhere
+
+- **Nothing is recorded between games.** No past scores, no winners, no stats.
+- **A running game does not follow live board edits.** The room takes a snapshot
+  when the host loads a code, so editing that board mid-game does not disturb
+  play. Intentional, but worth knowing.

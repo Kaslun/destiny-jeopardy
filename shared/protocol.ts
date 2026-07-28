@@ -22,6 +22,10 @@ export interface Clue {
   /** R2 object key for an uploaded file. Absent means show a placeholder. */
   mediaKey?: string;
   mediaLabel?: string;
+  /** How long this clue gets. Falls back to the board default. */
+  seconds?: number;
+  /** Run this clue with no time limit at all. Overrides `seconds`. */
+  timerOff?: boolean;
 }
 
 /** Uploads are refused above this; Workers cap a request body at 100 MB anyway. */
@@ -42,6 +46,19 @@ export interface FinalClue {
   category: string;
   t: string;
   a: string;
+  media?: Media;
+  mediaKey?: string;
+  mediaLabel?: string;
+}
+
+/** Fallback when neither the clue nor the board sets a time. */
+export const DEFAULT_CLUE_SECONDS = 20;
+export const MIN_CLUE_SECONDS = 5;
+export const MAX_CLUE_SECONDS = 300;
+
+export function clampSeconds(n: number): number {
+  if (!Number.isFinite(n)) return DEFAULT_CLUE_SECONDS;
+  return Math.max(MIN_CLUE_SECONDS, Math.min(MAX_CLUE_SECONDS, Math.round(n)));
 }
 
 export interface Game {
@@ -52,6 +69,26 @@ export interface Game {
   players?: { name: string; cls: string }[];
   categories: Category[];
   final?: FinalClue;
+  /** Board-wide default clue time; individual clues may override it. */
+  timerSeconds?: number;
+}
+
+/**
+ * Whether this clue is on the clock at all.
+ *
+ * Untimed clues never close their buzzer, so the host decides when to move on —
+ * useful for a clue with a long video, or a round played at a relaxed pace.
+ */
+export function isTimed(clue: Clue | FinalClue | null): boolean {
+  return !(clue as Clue | null)?.timerOff;
+}
+
+/** How long the given clue gets, resolving clue → board → fallback. */
+export function secondsFor(game: Game | null, clue: Clue | FinalClue | null): number {
+  const own = (clue as Clue | null)?.seconds;
+  if (typeof own === "number" && own > 0) return clampSeconds(own);
+  if (typeof game?.timerSeconds === "number" && game.timerSeconds > 0) return clampSeconds(game.timerSeconds);
+  return DEFAULT_CLUE_SECONDS;
 }
 
 export interface Player {
@@ -139,6 +176,8 @@ export interface RoomState {
   /** Server epoch ms when the clue went live; drives every screen's timer. */
   openedAt: number | null;
   timerSeconds: number;
+  /** False when the open clue runs with no time limit. */
+  timed: boolean;
   revealed: boolean;
   buzzes: Buzz[];
   /** Players who already answered this clue wrong and may not buzz again. */
@@ -218,7 +257,8 @@ export function emptyRoom(): RoomState {
     dd: null,
     control: null,
     openedAt: null,
-    timerSeconds: 20,
+    timerSeconds: DEFAULT_CLUE_SECONDS,
+    timed: true,
     revealed: false,
     buzzes: [],
     spent: [],
@@ -249,6 +289,8 @@ export function parseGame(raw: unknown): Game | null {
         ...(q?.dd ? { dd: true as const } : {}),
         ...(media ? { media, mediaLabel: String(q?.mediaLabel ?? "") } : {}),
         ...(media && mediaKey ? { mediaKey } : {}),
+        ...(typeof q?.seconds === "number" && q.seconds > 0 ? { seconds: clampSeconds(q.seconds) } : {}),
+        ...(q?.timerOff ? { timerOff: true as const } : {}),
       });
     }
     return {
@@ -264,9 +306,17 @@ export function parseGame(raw: unknown): Game | null {
       : [200, 400, 600, 800, 1000];
 
   const f = g.final as Partial<FinalClue> | undefined;
+  const fMedia = f?.media === "image" || f?.media === "video" ? f.media : undefined;
+  const fKey = typeof f?.mediaKey === "string" && f.mediaKey ? f.mediaKey : undefined;
   const final: FinalClue | undefined =
     f && (String(f.t ?? "").trim() || String(f.a ?? "").trim())
-      ? { category: String(f.category ?? ""), t: String(f.t ?? ""), a: String(f.a ?? "") }
+      ? {
+          category: String(f.category ?? ""),
+          t: String(f.t ?? ""),
+          a: String(f.a ?? ""),
+          ...(fMedia ? { media: fMedia, mediaLabel: String(f.mediaLabel ?? "") } : {}),
+          ...(fMedia && fKey ? { mediaKey: fKey } : {}),
+        }
       : undefined;
 
   return {
@@ -279,6 +329,9 @@ export function parseGame(raw: unknown): Game | null {
       : undefined,
     categories,
     ...(final ? { final } : {}),
+    ...(typeof g.timerSeconds === "number" && g.timerSeconds > 0
+      ? { timerSeconds: clampSeconds(g.timerSeconds) }
+      : {}),
   };
 }
 
@@ -299,7 +352,12 @@ export const MAX_CATS = 8;
 export type BoardOp =
   | { type: "meta"; field: "title" | "subtitle"; value: string }
   | { type: "value"; row: number; value: number }
-  | { type: "final"; field: "category" | "t" | "a"; value: string }
+  | { type: "final"; field: "category" | "t" | "a" | "mediaLabel"; value: string }
+  | { type: "finalMedia"; value: Media | null; key?: string | null }
+  /** Per-clue time. `value: null` falls back to the board default. */
+  | { type: "clueSeconds"; catId: string; row: number; value: number | null }
+  | { type: "clueTimerOff"; catId: string; row: number; value: boolean }
+  | { type: "boardSeconds"; value: number }
   | { type: "catName"; catId: string; value: string }
   | { type: "catAdd" }
   | { type: "catDelete"; catId: string }
@@ -373,6 +431,40 @@ export function applyBoardOp(game: Game, op: BoardOp): Game {
         ...game,
         final: { category: "", t: "", a: "", ...(game.final ?? {}), [op.field]: op.value },
       };
+
+    case "finalMedia": {
+      const next: FinalClue = { category: "", t: "", a: "", ...(game.final ?? {}) };
+      if (op.value) {
+        next.media = op.value;
+        next.mediaLabel = next.mediaLabel ?? "";
+        if (op.key) next.mediaKey = op.key;
+        else if (op.key === null) delete next.mediaKey;
+      } else {
+        delete next.media;
+        delete next.mediaKey;
+        delete next.mediaLabel;
+      }
+      return { ...game, final: next };
+    }
+
+    case "clueSeconds":
+      return withClue(op.catId, op.row, (clue) => {
+        const next = { ...clue };
+        if (op.value === null) delete next.seconds;
+        else next.seconds = clampSeconds(op.value);
+        return next;
+      });
+
+    case "clueTimerOff":
+      return withClue(op.catId, op.row, (clue) => {
+        const next = { ...clue };
+        if (op.value) next.timerOff = true;
+        else delete next.timerOff;
+        return next;
+      });
+
+    case "boardSeconds":
+      return { ...game, timerSeconds: clampSeconds(op.value) };
 
     case "catName":
       return withCat(op.catId, (cat) => ({ ...cat, name: op.value }));

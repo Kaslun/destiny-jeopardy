@@ -3,12 +3,33 @@
 import { useParams } from "next/navigation";
 import { C, mono, money, tintFor } from "../../../lib/theme";
 import { mediaUrl } from "../../../lib/media";
+import { useSound } from "../../../lib/sound";
+import { useCountdown } from "../../../lib/useCountdown";
 import { useRole } from "../../../lib/useRoom";
 import { clueKey, type RoomState } from "../../../shared/protocol";
 
 export default function TvBoard() {
   const room = String(useParams().room ?? "").toUpperCase();
   const { state, connected } = useRole(room, "tv");
+
+  // The TV is the room's speaker — phones stay quiet apart from their own buzz.
+  const sound = useSound(true);
+  // An untimed clue is fed a null start, so the countdown never runs at all.
+  const timed = state?.timed !== false;
+  const timer = useCountdown(timed ? (state?.openedAt ?? null) : null, state?.timerSeconds ?? 20);
+
+  const clueLive = !!state?.open && state.phase === "buzz";
+  const wagering = state?.phase === "wager";
+  const anyBuzz = (state?.buzzes.length ?? 0) > 0;
+  const finalClueUp = state?.final?.phase === "clue";
+
+  sound.useCueOn(clueLive, "clueOpen");
+  sound.useCueOn(wagering, "dailyDouble");
+  sound.useCueOn(anyBuzz, "buzz");
+  sound.useCueOn(!!state?.revealed, "reveal");
+  sound.useCueOn(finalClueUp, "finalThink");
+  // Only when a clue is genuinely live and nobody got in.
+  sound.useCueOn(timed && clueLive && timer.expired && !anyBuzz, "timeUp");
 
   if (!state?.game) {
     return (
@@ -67,6 +88,20 @@ export default function TvBoard() {
         <Badge>
           ROOM <span style={{ color: C.gold }}>{room}</span>
         </Badge>
+        <button
+          onClick={() => sound.setMuted(!sound.muted)}
+          title={sound.muted ? "Sound off" : "Sound on"}
+          style={{
+            padding: "10px 14px",
+            background: "#0e1420",
+            border: `1px solid ${C.line}`,
+            fontFamily: mono,
+            fontSize: 13,
+            color: sound.muted ? C.faint : C.cyan,
+          }}
+        >
+          {sound.muted ? "🔇" : "🔊"}
+        </button>
       </header>
 
       <div
@@ -263,14 +298,16 @@ export default function TvBoard() {
           }}
         >
           <div style={{ flex: "none", height: 4, background: "#1a2130" }}>
-            <div
-              key={openedAt ?? 0}
-              style={{
-                height: "100%",
-                background: `linear-gradient(90deg,${C.gold},${C.orange})`,
-                animation: `drain ${timerSeconds}s linear forwards`,
-              }}
-            />
+            {timed && (
+              <div
+                key={openedAt ?? 0}
+                style={{
+                  height: "100%",
+                  background: `linear-gradient(90deg,${C.gold},${C.orange})`,
+                  animation: `drain ${timerSeconds}s linear forwards`,
+                }}
+              />
+            )}
           </div>
 
           <div
@@ -288,6 +325,18 @@ export default function TvBoard() {
             </div>
             <div style={{ fontFamily: mono, fontSize: 15, letterSpacing: ".3em", color: dd ? C.violet : "#9fb0c8" }}>
               {dd ? `WAGER ${money(dd.wager ?? 0)}` : game.values[open.r]}
+            </div>
+            <div style={{ flex: 1 }} />
+            <div
+              style={{
+                fontFamily: mono,
+                fontSize: 28,
+                fontWeight: 600,
+                fontVariantNumeric: "tabular-nums",
+                color: !timed ? "#3d4a63" : timer.expired ? C.orange : timer.remaining <= 5 ? C.gold : "#6d7791",
+              }}
+            >
+              {!timed ? "∞" : timer.expired ? "TIME" : `${timer.remaining}s`}
             </div>
             {openClue.dd && (
               <div
@@ -521,6 +570,26 @@ function FinalBoard({ state }: { state: RoomState }) {
           <span style={{ color: C.faint }}>
             {final.order.filter((id) => final.entries[id].wager !== null).length} OF {final.order.length} LOCKED IN
           </span>
+        </div>
+      )}
+
+      {final.phase !== "wager" && clue?.mediaKey && (
+        <div
+          style={{
+            height: "clamp(140px,28vh,340px)",
+            display: "grid",
+            placeItems: "center",
+            background: "#05070c",
+            border: `1px solid #2a3244`,
+            overflow: "hidden",
+            width: "min(900px, 92%)",
+          }}
+        >
+          {clue.media === "video" ? (
+            <video key={clue.mediaKey} src={mediaUrl(clue.mediaKey)} autoPlay controls playsInline style={{ maxWidth: "100%", maxHeight: "100%" }} />
+          ) : (
+            <img key={clue.mediaKey} src={mediaUrl(clue.mediaKey)} alt={clue.mediaLabel || ""} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+          )}
         </div>
       )}
 

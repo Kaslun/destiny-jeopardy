@@ -6,6 +6,7 @@ import { C, mono, money, tintFor } from "../../../lib/theme";
 import { useRole } from "../../../lib/useRoom";
 import { loadBoard } from "../../../lib/boards";
 import { mediaUrl } from "../../../lib/media";
+import { useCountdown } from "../../../lib/useCountdown";
 import { clueKey, parseGame } from "../../../shared/protocol";
 
 export default function HostConsole() {
@@ -15,6 +16,8 @@ export default function HostConsole() {
   const [code, setCode] = useState("");
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  // The host sits next to the TV, so this screen stays silent unless asked.
+  const timer = useCountdown(state?.openedAt ?? null, state?.timerSeconds ?? 20);
 
   const loadByCode = async () => {
     const slug = code.trim().toUpperCase();
@@ -231,8 +234,22 @@ export default function HostConsole() {
                     </div>
                   )}
                   <div style={{ flex: 1 }} />
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em", color: "#7d879c" }}>
-                    READ THIS ALOUD
+                  <div
+                    style={{
+                      fontFamily: mono,
+                      fontSize: 15,
+                      fontWeight: 600,
+                      fontVariantNumeric: "tabular-nums",
+                      color: timer.expired ? C.orange : timer.remaining <= 5 ? C.gold : "#7d879c",
+                    }}
+                  >
+                    {phase === "wager"
+                      ? "—"
+                      : !state.timed
+                        ? "NO TIMER · CLOSE WHEN READY"
+                        : timer.expired
+                          ? "TIME UP · BUZZERS CLOSED"
+                          : `${timer.remaining}s`}
                   </div>
                 </div>
                 {openClue.mediaKey && (

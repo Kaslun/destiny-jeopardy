@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { C, mono, money } from "../../../lib/theme";
 import { useRole } from "../../../lib/useRoom";
+import { useSound } from "../../../lib/sound";
 import type { FinalEntry, FinalPhase } from "../../../shared/protocol";
 
 const NAME_KEY = "guardian-jeopardy/player-name";
@@ -32,6 +33,18 @@ export default function PhoneBuzzer() {
   }, []);
 
   const { state, you, connected, error, send } = useRole(room, "player", name || "GUARDIAN", cls);
+
+  // Phones only confirm your own actions — a room of them echoing the TV would
+  // be chaos. Vibration where it exists, a short tone otherwise.
+  const sound = useSound(true);
+  const myBuzz = !!you && (state?.buzzes ?? []).some((b) => b.playerId === you);
+  const iAmFirst = !!you && state?.buzzes?.[0]?.playerId === you;
+  sound.useCueOn(myBuzz, "buzz");
+  sound.useCueOn(iAmFirst, "correct");
+
+  useEffect(() => {
+    if (myBuzz && typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(60);
+  }, [myBuzz]);
 
   const commitName = () => {
     const next = { name: draft.name.trim().toUpperCase() || "GUARDIAN", cls: draft.cls.trim().toUpperCase() };

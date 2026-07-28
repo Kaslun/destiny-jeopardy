@@ -1,0 +1,215 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+/**
+ * Room audio.
+ *
+ * Every cue is synthesised with WebAudio rather than shipped as a file, so the
+ * game makes noise with no assets to host, no licensing to worry about, and
+ * nothing extra to download onto a phone. Swapping in real recordings later is
+ * a one-liner per cue — see `setSoundFile`.
+ */
+
+export type Cue =
+  | "clueOpen"
+  | "buzz"
+  | "correct"
+  | "wrong"
+  | "timeUp"
+  | "dailyDouble"
+  | "finalThink"
+  | "reveal"
+  | "join";
+
+/** Optional real audio, keyed by cue. Anything set here wins over the synth. */
+const files = new Map<Cue, string>();
+
+export function setSoundFile(cue: Cue, url: string | null): void {
+  if (url) files.set(cue, url);
+  else files.delete(cue);
+}
+
+const MUTE_KEY = "guardian-jeopardy/muted";
+
+let ctx: AudioContext | null = null;
+
+function audio(): AudioContext | null {
+  if (typeof window === "undefined") return null;
+  if (!ctx) {
+    const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctor) return null;
+    ctx = new Ctor();
+  }
+  return ctx;
+}
+
+/**
+ * Browsers refuse to start audio until the user has interacted with the page.
+ * Call this from any click or key press; it is cheap and idempotent.
+ */
+export function unlockAudio(): void {
+  const a = audio();
+  if (a && a.state === "suspended") void a.resume();
+}
+
+/** A single shaped tone. The building block for everything below. */
+interface ToneSpec {
+  freq: number;
+  /** Slide from this frequency down (or up) to `freq`. Defaults to no slide. */
+  from?: number;
+  start?: number;
+  length?: number;
+  gain?: number;
+  type?: OscillatorType;
+}
+
+function tone(a: AudioContext, spec: ToneSpec): void {
+  const { freq, from = spec.freq, start = 0, length = 0.2, gain = 0.2, type = "sine" } = spec;
+  const osc = a.createOscillator();
+  const vol = a.createGain();
+  const t0 = a.currentTime + start;
+
+  osc.type = type;
+  osc.frequency.setValueAtTime(from, t0);
+  if (from !== freq) osc.frequency.exponentialRampToValueAtTime(Math.max(freq, 1), t0 + length);
+
+  // A short attack and an exponential tail: square edges click audibly.
+  vol.gain.setValueAtTime(0.0001, t0);
+  vol.gain.exponentialRampToValueAtTime(gain, t0 + 0.012);
+  vol.gain.exponentialRampToValueAtTime(0.0001, t0 + length);
+
+  osc.connect(vol).connect(a.destination);
+  osc.start(t0);
+  osc.stop(t0 + length + 0.02);
+}
+
+function noise(a: AudioContext, { length = 0.25, gain = 0.12 }): void {
+  const frames = Math.floor(a.sampleRate * length);
+  const buffer = a.createBuffer(1, frames, a.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < frames; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / frames);
+
+  const src = a.createBufferSource();
+  const vol = a.createGain();
+  src.buffer = buffer;
+  vol.gain.setValueAtTime(gain, a.currentTime);
+  src.connect(vol).connect(a.destination);
+  src.start();
+}
+
+const SYNTH: Record<Cue, (a: AudioContext) => void> = {
+  // Soft two-note rise as a clue comes up.
+  clueOpen: (a) => {
+    tone(a, { freq: 523.25, length: 0.14, gain: 0.14, type: "triangle" });
+    tone(a, { freq: 783.99, start: 0.1, length: 0.22, gain: 0.14, type: "triangle" });
+  },
+  // The buzzer: short, blunt, unmistakable across a room.
+  buzz: (a) => {
+    tone(a, { freq: 180, from: 240, length: 0.18, gain: 0.28, type: "square" });
+  },
+  correct: (a) => {
+    tone(a, { freq: 659.25, length: 0.12, gain: 0.16, type: "triangle" });
+    tone(a, { freq: 987.77, start: 0.09, length: 0.26, gain: 0.16, type: "triangle" });
+  },
+  wrong: (a) => {
+    tone(a, { freq: 150, from: 220, length: 0.32, gain: 0.22, type: "sawtooth" });
+  },
+  // Falling tone plus a hiss — reads as "that's it" without being harsh.
+  timeUp: (a) => {
+    tone(a, { freq: 120, from: 420, length: 0.55, gain: 0.24, type: "sawtooth" });
+    noise(a, { length: 0.4, gain: 0.07 });
+  },
+  dailyDouble: (a) => {
+    [523.25, 698.46, 880, 1174.66].forEach((f, i) =>
+      tone(a, { freq: f, start: i * 0.075, length: 0.2, gain: 0.15, type: "triangle" }),
+    );
+  },
+  // A few slow pulses when the final clue appears — a nod, not the real tune.
+  finalThink: (a) => {
+    [0, 0.36, 0.72].forEach((s) => tone(a, { freq: 392, start: s, length: 0.3, gain: 0.1, type: "sine" }));
+  },
+  reveal: (a) => {
+    tone(a, { freq: 880, from: 587.33, length: 0.3, gain: 0.15, type: "triangle" });
+  },
+  join: (a) => {
+    tone(a, { freq: 880, length: 0.1, gain: 0.1, type: "sine" });
+  },
+};
+
+export function playCue(cue: Cue): void {
+  try {
+    const url = files.get(cue);
+    if (url) {
+      const el = new Audio(url);
+      el.volume = 0.8;
+      void el.play().catch(() => {});
+      return;
+    }
+    const a = audio();
+    if (!a) return;
+    if (a.state === "suspended") void a.resume();
+    SYNTH[cue]?.(a);
+  } catch {
+    // Sound is decoration; never let it break a game.
+  }
+}
+
+export interface SoundControls {
+  muted: boolean;
+  setMuted: (muted: boolean) => void;
+  play: (cue: Cue) => void;
+  /** Fires a cue only when `when` flips from false to true. */
+  useCueOn: (when: boolean, cue: Cue) => void;
+}
+
+export function useSound(enabledByDefault = true): SoundControls {
+  const [muted, setMutedState] = useState(!enabledByDefault);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(MUTE_KEY);
+      if (saved !== null) setMutedState(saved === "1");
+    } catch {
+      /* storage unavailable — the toggle still works for this session */
+    }
+  }, []);
+
+  // Any interaction is enough to satisfy the browser's autoplay rules.
+  useEffect(() => {
+    const unlock = () => unlockAudio();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
+  const setMuted = useCallback((next: boolean) => {
+    setMutedState(next);
+    try {
+      localStorage.setItem(MUTE_KEY, next ? "1" : "0");
+    } catch {
+      /* not fatal */
+    }
+    if (!next) unlockAudio();
+  }, []);
+
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
+
+  const play = useCallback((cue: Cue) => {
+    if (!mutedRef.current) playCue(cue);
+  }, []);
+
+  const useCueOn = (when: boolean, cue: Cue) => {
+    const previous = useRef(when);
+    useEffect(() => {
+      if (when && !previous.current) play(cue);
+      previous.current = when;
+    }, [when, cue]);
+  };
+
+  return { muted, setMuted, play, useCueOn };
+}

@@ -8,6 +8,7 @@ import { storeEditorName, storedEditorName, useBoard } from "../lib/useBoard";
 import { mediaLimitLabel, mediaUrl, uploadMedia } from "../lib/media";
 import {
   applyBoardOp,
+  DEFAULT_CLUE_SECONDS,
   MAX_CATS,
   MIN_CATS,
   newSlug,
@@ -137,8 +138,9 @@ export default function Editor({ slug }: { slug?: string }) {
     );
   }
 
-  const selClue = selCat?.clues[sel.r] ?? { t: "", a: "" };
+  const selClue: Clue = selCat?.clues[sel.r] ?? { t: "", a: "" };
   const media = selClue.media ?? "";
+  const boardSeconds = game.timerSeconds ?? DEFAULT_CLUE_SECONDS;
   const finalReady = !!(game.final?.t.trim() && game.final?.a.trim());
 
   const publish = async () => {
@@ -154,7 +156,7 @@ export default function Editor({ slug }: { slug?: string }) {
     }
   };
 
-  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>, target: "clue" | "final" = "clue") => {
     const file = e.target.files?.[0];
     e.target.value = ""; // let the same file be picked again after a failure
     if (!file) return;
@@ -165,14 +167,16 @@ export default function Editor({ slug }: { slug?: string }) {
       setNote({ text: "SAVE & SHARE THIS BOARD FIRST — UPLOADS ARE STORED AGAINST ITS CODE", ok: false });
       return;
     }
-    const clueId = selClue.id;
-    if (!clueId) return;
+    // The final clue has no id of its own, so it gets a fixed one in the key.
+    const owner = target === "final" ? "final" : selClue.id;
+    if (!owner) return;
 
     setUploading(true);
     setUploadPct(0);
     try {
-      const up = await uploadMedia(slug, clueId, file, setUploadPct);
-      emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: up.media, key: up.key });
+      const up = await uploadMedia(slug, owner, file, setUploadPct);
+      if (target === "final") emit({ type: "finalMedia", value: up.media, key: up.key });
+      else emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: up.media, key: up.key });
       setNote({ text: `UPLOADED ${file.name.toUpperCase()}`, ok: true });
     } catch (err) {
       setNote({ text: (err as Error).message.toUpperCase(), ok: false });
@@ -282,6 +286,24 @@ export default function Editor({ slug }: { slug?: string }) {
             ))}
           </Section>
 
+          <Section label="TIMER">
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <div style={{ fontFamily: mono, fontSize: 10, color: "#6b7488", flex: 1 }}>BOARD DEFAULT</div>
+              <Synced
+                value={String(boardSeconds)}
+                onCommit={(raw) => {
+                  const n = Number(raw.replace(/[^0-9]/g, ""));
+                  if (n) emit({ type: "boardSeconds", value: n });
+                }}
+                style={{ ...input, width: 74, fontFamily: mono, fontSize: 13, textAlign: "center" }}
+              />
+              <span style={{ fontFamily: mono, fontSize: 11, color: C.faint }}>SEC</span>
+            </div>
+            <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint }}>
+              ANY CLUE CAN OVERRIDE THIS
+            </div>
+          </Section>
+
           <Section label="FINAL ROUND">
             <Field label="CATEGORY">
               <Synced
@@ -307,6 +329,51 @@ export default function Editor({ slug }: { slug?: string }) {
                 placeholder="What is …?"
                 style={{ ...input, color: C.cyan, fontWeight: 600 }}
               />
+            </Field>
+            <Field label="MEDIA">
+              {game.final?.mediaKey ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div
+                    style={{
+                      border: `1px solid ${C.line}`,
+                      background: "#05070c",
+                      display: "grid",
+                      placeItems: "center",
+                      height: 96,
+                      overflow: "hidden",
+                    }}
+                  >
+                    {game.final.media === "video" ? (
+                      <video src={mediaUrl(game.final.mediaKey)} controls preload="metadata" style={{ maxWidth: "100%", maxHeight: "100%" }} />
+                    ) : (
+                      <img src={mediaUrl(game.final.mediaKey)} alt="" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <label style={{ ...btn, flex: 1, textAlign: "center", cursor: "pointer", fontSize: 10 }}>
+                      ⟳ REPLACE
+                      <input type="file" accept="image/*,video/*" hidden onChange={(e) => onPickFile(e, "final")} />
+                    </label>
+                    <button onClick={() => emit({ type: "finalMedia", value: null })} style={{ ...btn, flex: 1, fontSize: 10, color: C.orange }}>
+                      ✕ REMOVE
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <label
+                  style={{
+                    ...btn,
+                    textAlign: "center",
+                    cursor: uploading ? "progress" : "pointer",
+                    borderStyle: "dashed",
+                    fontSize: 10,
+                    padding: "11px",
+                  }}
+                >
+                  {uploading ? `UPLOADING ${Math.round(uploadPct * 100)}%` : "⬆ IMAGE OR VIDEO"}
+                  <input type="file" accept="image/*,video/*" hidden disabled={uploading} onChange={(e) => onPickFile(e, "final")} />
+                </label>
+              )}
             </Field>
           </Section>
 
@@ -427,6 +494,14 @@ export default function Editor({ slug }: { slug?: string }) {
                             style={{ width: 6, height: 6, borderRadius: "50%", background: w.color }}
                           />
                         ))}
+                        {q.timerOff && (
+                          <span
+                            title="No timer"
+                            style={{ fontFamily: mono, fontSize: 9, color: C.orange, border: `1px solid ${C.orange}`, padding: "0 3px", lineHeight: 1.3 }}
+                          >
+                            ∞
+                          </span>
+                        )}
                         {q.dd && (
                           <span style={{ fontFamily: mono, fontSize: 8, color: "#0a0d14", background: C.orange, padding: "1px 4px" }}>DD</span>
                         )}
@@ -635,6 +710,51 @@ export default function Editor({ slug }: { slug?: string }) {
                 placeholder="CAPTION (OPTIONAL)"
                 style={{ ...input, fontFamily: mono, fontSize: 11, marginTop: 6 }}
               />
+            )}
+          </Field>
+
+          <Field label="TIMER">
+            <button
+              onClick={() => emit({ type: "clueTimerOff", catId: selCatId, row: sel.r, value: !selClue.timerOff })}
+              style={{
+                ...btn,
+                padding: "11px",
+                fontWeight: 600,
+                color: selClue.timerOff ? "#0a0d14" : C.text,
+                background: selClue.timerOff ? C.orange : "#141b28",
+                borderColor: selClue.timerOff ? C.orange : "#2f3a4f",
+              }}
+            >
+              {selClue.timerOff ? "⏸ NO TIMER ON THIS CLUE" : "⏱ TIMED"}
+            </button>
+
+            {!selClue.timerOff && (
+              <>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+                  <Synced
+                    key={`${selCatId}:${sel.r}:secs`}
+                    value={selClue.seconds ? String(selClue.seconds) : ""}
+                    onCommit={(raw) => {
+                      const n = Number(raw.replace(/[^0-9]/g, ""));
+                      emit({ type: "clueSeconds", catId: selCatId, row: sel.r, value: raw.trim() === "" || !n ? null : n });
+                    }}
+                    placeholder={`${boardSeconds} (BOARD DEFAULT)`}
+                    style={{ ...input, flex: 1, fontFamily: mono, fontSize: 13 }}
+                  />
+                  <span style={{ fontFamily: mono, fontSize: 11, color: C.faint }}>SEC</span>
+                </div>
+                <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint, marginTop: 4 }}>
+                  {selClue.seconds
+                    ? `THIS CLUE RUNS ${selClue.seconds}s`
+                    : `LEAVE EMPTY TO USE THE BOARD DEFAULT (${boardSeconds}s)`}
+                </div>
+              </>
+            )}
+
+            {selClue.timerOff && (
+              <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.orange, marginTop: 4, lineHeight: 1.8 }}>
+                BUZZERS STAY OPEN UNTIL THE HOST CLOSES THE CLUE.
+              </div>
             )}
           </Field>
 
