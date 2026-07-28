@@ -7,6 +7,7 @@ import { Score } from "../../../components/Score";
 import { useRole } from "../../../lib/useRoom";
 import { loadBoard } from "../../../lib/boards";
 import { ClueMedia } from "../../../components/ClueMedia";
+import { JoinPanel } from "../../../components/JoinPanel";
 import { useCountdown } from "../../../lib/useCountdown";
 import { clueKey, parseGame } from "../../../shared/protocol";
 
@@ -54,7 +55,7 @@ export default function HostConsole() {
     return <Shell room={room}>{connected ? "JOINING ROOM…" : "CONNECTING…"}</Shell>;
   }
 
-  const { game, players, used, open, buzzes, revealed, lockout, phase, dd, control, final } = state;
+  const { game, players, used, open, buzzes, revealed, lockout, phase, dd, control, final, started } = state;
   const byId = new Map(players.map((p) => [p.id, p]));
   const openClue = open && game ? game.categories[open.c]?.clues[open.r] : null;
   const totalClues = game ? game.categories.length * game.values.length : 0;
@@ -427,6 +428,108 @@ export default function HostConsole() {
             </div>
           )}
 
+          {game && !started && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+              <div
+                style={{
+                  border: `1px solid ${C.line}`,
+                  background: C.tile,
+                  padding: "18px 20px",
+                  display: "flex",
+                  gap: 24,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <JoinPanel room={room} size={132} compact />
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: "#7d879c", marginBottom: 6 }}>
+                    LOBBY
+                  </div>
+                  <div style={{ fontSize: 15, color: C.dim, lineHeight: 1.6, maxWidth: "40ch" }}>
+                    Players scan the code or open{" "}
+                    <span style={{ color: C.gold, fontFamily: mono, fontSize: 13 }}>/play/{room}</span>. The TV is showing
+                    the same code, larger.
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: "#7d879c" }}>
+                    WHO HAS JOINED
+                  </div>
+                  <div style={{ fontFamily: mono, fontSize: 16, fontWeight: 600, color: C.cyan }}>{players.length}</div>
+                </div>
+
+                {players.length === 0 && (
+                  <div
+                    style={{
+                      border: `1px dashed ${C.line}`,
+                      padding: "22px 18px",
+                      textAlign: "center",
+                      fontFamily: mono,
+                      fontSize: 11,
+                      letterSpacing: ".18em",
+                      color: C.faint,
+                      lineHeight: 2,
+                    }}
+                  >
+                    NOBODY YET — YOU CAN START ANYWAY,
+                    <br />
+                    BUT NOTHING WILL BE SCOREABLE.
+                  </div>
+                )}
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(190px,1fr))", gap: 8 }}>
+                  {players.map((p, i) => (
+                    <div
+                      key={p.id}
+                      className="anim-row"
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "11px 13px",
+                        background: C.tile,
+                        border: `1px solid ${C.line}`,
+                        borderLeft: `3px solid ${tintFor(i)}`,
+                        opacity: p.connected ? 1 : 0.5,
+                        animationDelay: `${Math.min(i, 8) * 40}ms`,
+                      }}
+                    >
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontSize: 16, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {p.name}
+                        </div>
+                        <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".18em", color: "#6b7488" }}>
+                          {p.connected ? p.cls || "READY" : "AWAY"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                onClick={() => send({ type: "startGame" })}
+                className="tap lift"
+                style={{
+                  padding: "20px",
+                  fontFamily: mono,
+                  fontSize: 15,
+                  fontWeight: 600,
+                  letterSpacing: ".24em",
+                  color: "#0a0d14",
+                  background: `linear-gradient(100deg,${C.gold},${C.green})`,
+                  border: "none",
+                }}
+              >
+                ▶ START THE GAME
+              </button>
+            </div>
+          )}
+
           {game?.final && final && (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div
@@ -579,7 +682,7 @@ export default function HostConsole() {
             </div>
           )}
 
-          {game && !open && !final && (
+          {game && started && !open && !final && (
             <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
               <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".24em", color: "#7d879c" }}>
                 PICK A CLUE — IT GOES LIVE ON EVERY SCREEN
@@ -697,7 +800,12 @@ export default function HostConsole() {
           </div>
 
           <div style={{ borderTop: `1px solid ${C.lineSoft}`, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
-            {game?.final && !final && (
+            {started && (
+              <button onClick={() => send({ type: "returnToLobby" })} className="tap" style={flatBtn}>
+                ↩ BACK TO LOBBY
+              </button>
+            )}
+            {game?.final && !final && started && (
               <button
                 onClick={() => send({ type: "startFinal" })}
                 style={{

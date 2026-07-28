@@ -1,9 +1,11 @@
 "use client";
 
 import { useParams } from "next/navigation";
+import { useEffect, useRef } from "react";
 import { C, mono, money, tintFor } from "../../../lib/theme";
 import { Score } from "../../../components/Score";
 import { ClueMedia } from "../../../components/ClueMedia";
+import { Lobby } from "../../../components/Lobby";
 import { useSound } from "../../../lib/sound";
 import { useCountdown } from "../../../lib/useCountdown";
 import { useRole } from "../../../lib/useRoom";
@@ -32,10 +34,23 @@ export default function TvBoard() {
   // Only when a clue is genuinely live and nobody got in.
   sound.useCueOn(timed && clueLive && timer.expired && !anyBuzz, "timeUp");
 
+  // A blip as each person arrives, so the room knows the lobby is live.
+  const playerCount = state?.players.length ?? 0;
+  const lastCount = useRef(playerCount);
+  useEffect(() => {
+    if (playerCount > lastCount.current) sound.play("join");
+    lastCount.current = playerCount;
+  }, [playerCount, sound]);
+
+  // The lobby stands in for the board until the host starts, and it also covers
+  // "no board loaded yet" — both are the same thing from the room's point of
+  // view: we are waiting, here is how to join.
+  if (state && !state.started) {
+    return <Lobby state={state} room={room} />;
+  }
+
   if (!state?.game) {
-    return (
-      <Waiting room={room} connected={connected} hasState={!!state} />
-    );
+    return <Waiting room={room} connected={connected} hasState={!!state} />;
   }
 
   const { game, players, used, open, buzzes, revealed, openedAt, timerSeconds, phase, dd, final } = state;

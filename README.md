@@ -193,6 +193,24 @@ Two rules keep it safe:
   older than an hour, because a file uploaded seconds ago may just be waiting for
   its operation to land.
 
+## The lobby
+
+A room starts in a lobby rather than dropping straight onto a board. The TV
+shows a **QR code** and the room code at a size meant to be scanned from a sofa;
+players appear as they join, with a blip each time.
+
+The join URL is built from the browser's own origin, so the code is correct on
+localhost, on a LAN address and in production with nothing to configure.
+
+The host console shows the same code compactly, an overview of who has joined,
+and **Start the game**. Starting requires a board to be loaded — otherwise the
+host is told why. Until then the board and the final round are closed
+server-side, not merely hidden.
+
+**Back to lobby** returns mid-game without losing anything: scores and the loaded
+board survive, only the live clue is cleared. Useful between rounds, or when
+someone arrives late.
+
 ## Clue timers
 
 Each clue is one of three things, set in the editor:

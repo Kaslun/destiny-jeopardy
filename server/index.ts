@@ -169,7 +169,8 @@ export class JeopardyRoom extends Server<Env> {
         const s = this.#state;
         const game = s.game;
         if (!game) return;
-        if (s.final) return; // the board is closed once the final round starts
+        if (!s.started) return; // the board is closed while the room is in the lobby
+        if (s.final) return; // and once the final round starts
         const clue = game.categories[msg.c]?.clues[msg.r];
         if (!clue) return;
         if (s.used.includes(clueKey(msg.c, msg.r))) return;
@@ -242,13 +243,28 @@ export class JeopardyRoom extends Server<Env> {
         this.#state.lockout = msg.lockout;
         break;
       }
+      case "startGame": {
+        const s = this.#state;
+        if (!s.game) {
+          this.#send(conn, { type: "error", message: "load a board before starting" });
+          return;
+        }
+        s.started = true;
+        break;
+      }
+      case "returnToLobby": {
+        // Scores and the board survive; only the live clue is cleared.
+        this.#closeClue();
+        this.#state.started = false;
+        break;
+      }
       case "resetBoard": {
         this.#resetBoard();
         break;
       }
       case "startFinal": {
         const s = this.#state;
-        if (s.final) return;
+        if (s.final || !s.started) return;
         if (!s.game?.final) {
           this.#send(conn, { type: "error", message: "this game has no final clue" });
           return;

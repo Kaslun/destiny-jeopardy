@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { C, mono, money } from "../../../lib/theme";
+import { C, mono, money, tintFor } from "../../../lib/theme";
 import { Score } from "../../../components/Score";
 import { useRole } from "../../../lib/useRoom";
 import { useSound } from "../../../lib/sound";
@@ -129,6 +129,65 @@ export default function PhoneBuzzer() {
   // A Daily Double belongs to one player; for everyone else the buzzer is dead.
   const canBuzz = !!open && phase === "buzz" && myIndex === -1 && !spent && !locked && connected;
   const isFirst = phase === "buzz" ? myIndex === 0 : ddMine && phase === "live";
+
+  // Before the host starts, show that you're in and who else is here — a dead
+  // buzzer with no explanation reads as the app being broken.
+  if (state && !state.started) {
+    return (
+      <Frame>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 24, width: "100%", maxWidth: 340 }}>
+          <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".3em", color: "#7d879c" }}>YOU&apos;RE IN</div>
+          <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: ".03em", textAlign: "center" }}>
+            {me?.name ?? name}
+          </div>
+          <div
+            style={{
+              width: "100%",
+              border: `1px solid ${C.line}`,
+              background: "rgba(255,255,255,.03)",
+              padding: 16,
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+            }}
+          >
+            <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: C.faint }}>
+              IN THE ROOM · {state.players.length}
+            </div>
+            {state.players.map((p, i) => (
+              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, opacity: p.connected ? 1 : 0.45 }}>
+                <span style={{ width: 8, height: 8, background: tintFor(i), transform: "rotate(45deg)", flex: "none" }} />
+                <span style={{ fontSize: 16, fontWeight: p.id === you ? 700 : 500 }}>
+                  {p.name}
+                  {p.id === you ? " (YOU)" : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={() => setNamed(false)}
+            className="tap"
+            style={{
+              padding: "12px 18px",
+              fontFamily: mono,
+              fontSize: 11,
+              letterSpacing: ".16em",
+              background: "#141b28",
+              border: `1px solid ${C.line}`,
+              color: C.dim,
+            }}
+          >
+            CHANGE MY NAME
+          </button>
+          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: "#7d879c", textAlign: "center", lineHeight: 2 }}>
+            WAITING FOR THE HOST
+            <br />
+            TO START THE GAME
+          </div>
+        </div>
+      </Frame>
+    );
+  }
 
   const final = state?.final ?? null;
   if (final && you) {

@@ -159,6 +159,11 @@ export interface FinalRound {
 
 export interface RoomState {
   game: Game | null;
+  /**
+   * False while the room is still gathering. The TV shows the lobby, the board
+   * is closed, and players can join without anything being live.
+   */
+  started: boolean;
   /** Non-null once the final round has started. */
   final: FinalRound | null;
   players: Player[];
@@ -201,6 +206,10 @@ export type ClientMessage =
   | { type: "setDDPlayer"; playerId: string }
   | { type: "adjust"; playerId: string; delta: number }
   | { type: "setLockout"; lockout: Lockout }
+  /** Host: leave the lobby and open the board. */
+  | { type: "startGame" }
+  /** Host: back to the lobby, keeping scores and the loaded board. */
+  | { type: "returnToLobby" }
   | { type: "resetBoard" }
   /** Host: begin the final round. */
   | { type: "startFinal" }
@@ -249,6 +258,7 @@ export function finalBounds(score: number): { min: number; max: number } {
 export function emptyRoom(): RoomState {
   return {
     game: null,
+    started: false,
     final: null,
     players: [],
     used: [],
