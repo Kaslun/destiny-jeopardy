@@ -704,7 +704,11 @@ export default function HostConsole() {
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: "#7d879c" }}>
-                    {final.phase === "wager" ? "WHO HAS WAGERED" : "WHO HAS ANSWERED"}
+                    {final.phase === "wager"
+                      ? "WHO HAS WAGERED"
+                      : final.writingClosed
+                        ? "PENS DOWN — EVERYTHING IS LOCKED IN"
+                        : "WHO HAS ANSWERED"}
                   </div>
                   {final.order.map((id) => {
                     const entry = final.entries[id];
@@ -732,6 +736,11 @@ export default function HostConsole() {
               )}
 
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                {final.phase === "clue" && !final.writingClosed && (
+                  <button onClick={() => send({ type: "closeFinalWriting" })} className="tap" style={flatBtn}>
+                    ✋ PENS DOWN
+                  </button>
+                )}
                 {final.phase !== "done" && (
                   <button
                     onClick={() => send({ type: "finalAdvance" })}
