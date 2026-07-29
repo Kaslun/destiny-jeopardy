@@ -6,6 +6,7 @@ import { C, mono, money, tintFor } from "../../../lib/theme";
 import { Score } from "../../../components/Score";
 import { ClueMedia } from "../../../components/ClueMedia";
 import { Lobby } from "../../../components/Lobby";
+import { Results } from "../../../components/Results";
 import { useSound } from "../../../lib/sound";
 import { useCountdown } from "../../../lib/useCountdown";
 import { useRole } from "../../../lib/useRoom";
@@ -34,6 +35,17 @@ export default function TvBoard() {
   // Only when a clue is genuinely live and nobody got in.
   sound.useCueOn(timed && clueLive && timer.expired && !anyBuzz, "timeUp");
 
+  // Every ruling gets a verdict sound — right or wrong, board clue, Daily
+  // Double or final round. Keyed on the sequence number so two wrong answers in
+  // a row are two distinct sounds rather than one.
+  const ruling = state?.lastRuling ?? null;
+  const lastRulingSeq = useRef(ruling?.seq ?? 0);
+  useEffect(() => {
+    if (!ruling) return;
+    if (ruling.seq > lastRulingSeq.current) sound.play(ruling.correct ? "correct" : "wrong");
+    lastRulingSeq.current = ruling.seq;
+  }, [ruling, sound]);
+
   // A blip as each person arrives, so the room knows the lobby is live.
   const playerCount = state?.players.length ?? 0;
   const lastCount = useRef(playerCount);
@@ -41,6 +53,27 @@ export default function TvBoard() {
     if (playerCount > lastCount.current) sound.play("join");
     lastCount.current = playerCount;
   }, [playerCount, sound]);
+
+  // Standings: a roll under the empty board, a hit per place, a fanfare at the top.
+  const results = state?.results ?? null;
+  const placesOut = results?.revealed ?? 0;
+  const totalPlaces = results?.order.length ?? 0;
+  sound.useCueOn(!!results, "drumroll");
+  const lastPlacesOut = useRef(placesOut);
+  useEffect(() => {
+    if (!results) {
+      lastPlacesOut.current = 0;
+      return;
+    }
+    if (placesOut > lastPlacesOut.current) {
+      sound.play(placesOut >= totalPlaces ? "fanfare" : "placeReveal");
+    }
+    lastPlacesOut.current = placesOut;
+  }, [placesOut, totalPlaces, results, sound]);
+
+  if (state?.results) {
+    return <Results state={state} />;
+  }
 
   // The lobby stands in for the board until the host starts, and it also covers
   // "no board loaded yet" — both are the same thing from the room's point of

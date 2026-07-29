@@ -138,6 +138,31 @@ export interface DailyDouble {
  * revealing, then they come out one player at a time — lowest score first, so
  * the leader's answer lands last.
  */
+/**
+ * The closing standings, revealed one place at a time.
+ *
+ * `order` runs worst-first, because that is the order a game show reveals in —
+ * you count up to the winner rather than down from them.
+ */
+export interface Results {
+  order: string[];
+  /** How many places have been shown so far. */
+  revealed: number;
+}
+
+/** Placings, best first, with ties sharing a rank. */
+export function standings(players: Player[]): { id: string; rank: number; score: number }[] {
+  const sorted = [...players].sort((a, b) => b.score - a.score);
+  let previousScore: number | null = null;
+  let previousRank = 0;
+  return sorted.map((p, i) => {
+    const rank = previousScore !== null && p.score === previousScore ? previousRank : i + 1;
+    previousScore = p.score;
+    previousRank = rank;
+    return { id: p.id, rank, score: p.score };
+  });
+}
+
 export type FinalPhase = "wager" | "clue" | "reveal" | "done";
 
 export interface FinalEntry {
@@ -166,6 +191,18 @@ export interface RoomState {
   started: boolean;
   /** Non-null once the final round has started. */
   final: FinalRound | null;
+  /** Non-null once the host has moved to the closing standings. */
+  results: Results | null;
+  /**
+   * The host's most recent ruling, so screens can react to the outcome.
+   *
+   * A wrong answer looks different in every mode — an ordinary clue grows
+   * `spent`, a Daily Double simply closes exactly as a correct one does, and the
+   * final round marks an entry. Rather than have each screen infer the verdict
+   * from those, the room states it. `seq` increments so two identical rulings in
+   * a row are still two distinct events.
+   */
+  lastRuling: { correct: boolean; seq: number } | null;
   players: Player[];
   /** Played clues, as "column-row" keys. */
   used: string[];
@@ -221,7 +258,13 @@ export type ClientMessage =
   | { type: "setFinalResponse"; response: string }
   | { type: "lockFinal" }
   /** Host: rule on the player currently being revealed. */
-  | { type: "judgeFinal"; correct: boolean };
+  | { type: "judgeFinal"; correct: boolean }
+  /** Host: move to the closing standings. */
+  | { type: "showResults" }
+  /** Host: reveal the next place, worst to best. */
+  | { type: "revealNextPlace" }
+  /** Host: leave the standings and go back to the board. */
+  | { type: "endResults" };
 
 export type ServerMessage =
   | { type: "state"; state: RoomState; you: string | null }
@@ -260,6 +303,8 @@ export function emptyRoom(): RoomState {
     game: null,
     started: false,
     final: null,
+    results: null,
+    lastRuling: null,
     players: [],
     used: [],
     open: null,

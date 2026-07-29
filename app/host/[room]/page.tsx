@@ -9,7 +9,7 @@ import { loadBoard } from "../../../lib/boards";
 import { ClueMedia } from "../../../components/ClueMedia";
 import { JoinPanel } from "../../../components/JoinPanel";
 import { useCountdown } from "../../../lib/useCountdown";
-import { clueKey, parseGame } from "../../../shared/protocol";
+import { clueKey, parseGame, standings } from "../../../shared/protocol";
 
 export default function HostConsole() {
   const room = String(useParams().room ?? "").toUpperCase();
@@ -55,7 +55,7 @@ export default function HostConsole() {
     return <Shell room={room}>{connected ? "JOINING ROOM…" : "CONNECTING…"}</Shell>;
   }
 
-  const { game, players, used, open, buzzes, revealed, lockout, phase, dd, control, final, started } = state;
+  const { game, players, used, open, buzzes, revealed, lockout, phase, dd, control, final, started, results } = state;
   const byId = new Map(players.map((p) => [p.id, p]));
   const openClue = open && game ? game.categories[open.c]?.clues[open.r] : null;
   const totalClues = game ? game.categories.length * game.values.length : 0;
@@ -428,6 +428,76 @@ export default function HostConsole() {
             </div>
           )}
 
+          {results && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {(() => {
+                const byId = new Map(players.map((p) => [p.id, p]));
+                const left = results.order.length - results.revealed;
+                const nextId = results.order[results.revealed];
+                const next = nextId ? byId.get(nextId) : null;
+                const done = left === 0;
+                const ranked = standings(players);
+                return (
+                  <>
+                    <div
+                      style={{
+                        border: `1px solid ${done ? C.gold : C.violet}`,
+                        background: done ? "rgba(240,196,105,.08)" : "rgba(177,140,240,.08)",
+                        padding: "18px 20px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 12,
+                      }}
+                    >
+                      <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".26em", color: done ? C.gold : C.violet }}>
+                        FINAL STANDINGS · {results.revealed} OF {results.order.length} REVEALED
+                      </div>
+                      {done ? (
+                        <div style={{ fontSize: 24, fontWeight: 700 }}>
+                          {byId.get(ranked[0]?.id ?? "")?.name ?? "—"} wins with {money(ranked[0]?.score ?? 0)}
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: "#7d879c" }}>
+                            NEXT TO REVEAL
+                          </div>
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
+                            <div style={{ fontSize: 26, fontWeight: 700 }}>{next?.name ?? "—"}</div>
+                            <div style={{ fontFamily: mono, fontSize: 15, color: C.dim }}>
+                              {money(next?.score ?? 0)} · {left === 1 ? "the winner" : `${left} left`}
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      {!done && (
+                        <button
+                          onClick={() => send({ type: "revealNextPlace" })}
+                          className="tap lift"
+                          style={{
+                            ...flatBtn,
+                            background: `linear-gradient(100deg,${C.violet},${C.cyan})`,
+                            color: "#0a0d14",
+                            border: "none",
+                            fontWeight: 600,
+                            letterSpacing: ".2em",
+                          }}
+                        >
+                          {left === 1 ? "◆ REVEAL THE WINNER" : "▶ REVEAL NEXT PLACE"}
+                        </button>
+                      )}
+                      <button onClick={() => send({ type: "endResults" })} className="tap" style={flatBtn}>
+                        ↩ BACK TO THE BOARD
+                      </button>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+
           {game && !started && (
             <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
               <div
@@ -682,7 +752,7 @@ export default function HostConsole() {
             </div>
           )}
 
-          {game && started && !open && !final && (
+          {game && started && !open && !final && !results && (
             <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
               <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".24em", color: "#7d879c" }}>
                 PICK A CLUE — IT GOES LIVE ON EVERY SCREEN
@@ -800,6 +870,22 @@ export default function HostConsole() {
           </div>
 
           <div style={{ borderTop: `1px solid ${C.lineSoft}`, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+            {started && !results && (
+              <button
+                onClick={() => send({ type: "showResults" })}
+                className="tap lift"
+                style={{
+                  ...flatBtn,
+                  background: `linear-gradient(100deg,${C.gold},${C.orange})`,
+                  color: "#0a0d14",
+                  border: "none",
+                  fontWeight: 600,
+                  letterSpacing: ".2em",
+                }}
+              >
+                ★ FINAL STANDINGS
+              </button>
+            )}
             {started && (
               <button onClick={() => send({ type: "returnToLobby" })} className="tap" style={flatBtn}>
                 ↩ BACK TO LOBBY

@@ -6,7 +6,13 @@ import { C, mono, money, tintFor } from "../../../lib/theme";
 import { Score } from "../../../components/Score";
 import { useRole } from "../../../lib/useRoom";
 import { useSound } from "../../../lib/sound";
-import type { FinalEntry, FinalPhase } from "../../../shared/protocol";
+import { standings, type FinalEntry, type FinalPhase } from "../../../shared/protocol";
+
+/** 1st, 2nd, 3rd, 4th … */
+function ordinal(n: number): string {
+  if (n % 100 >= 11 && n % 100 <= 13) return "TH";
+  return ["TH", "ST", "ND", "RD"][n % 10] ?? "TH";
+}
 
 const NAME_KEY = "guardian-jeopardy/player-name";
 
@@ -129,6 +135,56 @@ export default function PhoneBuzzer() {
   // A Daily Double belongs to one player; for everyone else the buzzer is dead.
   const canBuzz = !!open && phase === "buzz" && myIndex === -1 && !spent && !locked && connected;
   const isFirst = phase === "buzz" ? myIndex === 0 : ddMine && phase === "live";
+
+  // The standings take over every phone, so nobody is staring at a dead buzzer
+  // while the room watches the reveal.
+  if (state?.results && you) {
+    const mine = standings(state.players).find((s) => s.id === you);
+    const out = state.results.order.slice(0, state.results.revealed).includes(you);
+    const won = out && mine?.rank === 1;
+    return (
+      <main
+        style={{
+          minHeight: "100dvh",
+          display: "grid",
+          placeItems: "center",
+          padding: "40px 22px",
+          textAlign: "center",
+          background: won
+            ? "radial-gradient(90% 60% at 50% 35%, #3a2408, #17100a 72%)"
+            : "radial-gradient(110% 60% at 50% 10%, #1d1533, #08070f 72%)",
+          transition: "background 1s var(--snap)",
+        }}
+      >
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 20 }}>
+          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".32em", color: won ? C.gold : C.violet }}>
+            FINAL STANDINGS
+          </div>
+          {out ? (
+            <>
+              <div key="place" className="anim-pop" style={{ fontSize: 84, fontWeight: 700, lineHeight: 1, color: won ? C.gold : C.text }}>
+                {mine?.rank}
+                <span style={{ fontSize: 30 }}>{ordinal(mine?.rank ?? 0)}</span>
+              </div>
+              <Score value={me?.score ?? 0} positiveColor={C.gold} style={{ fontFamily: mono, fontSize: 30, fontWeight: 600 }} />
+              <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".24em", color: won ? C.gold : "#7d879c", lineHeight: 2 }}>
+                {won ? "YOU WON" : "WATCH THE TV"}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: 30, fontWeight: 700 }}>{me?.name ?? name}</div>
+              <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".24em", color: "#7d879c", lineHeight: 2.2 }}>
+                YOUR PLACE HASN&apos;T
+                <br />
+                BEEN CALLED YET
+              </div>
+            </>
+          )}
+        </div>
+      </main>
+    );
+  }
 
   // Before the host starts, show that you're in and who else is here — a dead
   // buzzer with no explanation reads as the app being broken.

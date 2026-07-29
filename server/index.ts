@@ -23,6 +23,7 @@ import {
   MAX_MEDIA_BYTES,
   parseGame,
   secondsFor,
+  standings,
   wagerBounds,
   type BoardClientMessage,
   type BoardServerMessage,
@@ -170,7 +171,7 @@ export class JeopardyRoom extends Server<Env> {
         const game = s.game;
         if (!game) return;
         if (!s.started) return; // the board is closed while the room is in the lobby
-        if (s.final) return; // and once the final round starts
+        if (s.final || s.results) return; // and once the final round or standings begin
         const clue = game.categories[msg.c]?.clues[msg.r];
         if (!clue) return;
         if (s.used.includes(clueKey(msg.c, msg.r))) return;
@@ -255,6 +256,7 @@ export class JeopardyRoom extends Server<Env> {
       case "returnToLobby": {
         // Scores and the board survive; only the live clue is cleared.
         this.#closeClue();
+        this.#state.results = null;
         this.#state.started = false;
         break;
       }
@@ -298,6 +300,31 @@ export class JeopardyRoom extends Server<Env> {
       }
       case "endFinal": {
         this.#state.final = null;
+        break;
+      }
+      case "showResults": {
+        const s = this.#state;
+        if (!s.started) return;
+        if (s.players.length === 0) {
+          this.#send(conn, { type: "error", message: "nobody has played — there is nothing to reveal" });
+          return;
+        }
+        this.#closeClue();
+        // Worst first: the standings count up to the winner.
+        s.results = {
+          order: standings(s.players).map((p) => p.id).reverse(),
+          revealed: 0,
+        };
+        break;
+      }
+      case "revealNextPlace": {
+        const r = this.#state.results;
+        if (!r) return;
+        if (r.revealed < r.order.length) r.revealed++;
+        break;
+      }
+      case "endResults": {
+        this.#state.results = null;
         break;
       }
       default:
@@ -435,6 +462,7 @@ export class JeopardyRoom extends Server<Env> {
 
     entry.judged = correct ? "correct" : "wrong";
     this.#addScore(id, correct ? (entry.wager ?? 0) : -(entry.wager ?? 0));
+    this.#noteRuling(correct);
   }
 
   #handleBuzz(meta: ConnMeta) {
@@ -463,6 +491,7 @@ export class JeopardyRoom extends Server<Env> {
       if (s.phase !== "live" || s.dd.wager === null) return;
       this.#addScore(s.dd.playerId, correct ? s.dd.wager : -s.dd.wager);
       if (correct) s.control = s.dd.playerId;
+      this.#noteRuling(correct);
       this.#closeClue();
       return;
     }
@@ -474,6 +503,7 @@ export class JeopardyRoom extends Server<Env> {
       if (top) {
         this.#addScore(top.playerId, value);
         s.control = top.playerId; // they pick the next clue
+        this.#noteRuling(true);
       }
       this.#closeClue();
       return;
@@ -483,7 +513,14 @@ export class JeopardyRoom extends Server<Env> {
       this.#addScore(top.playerId, -value);
       s.spent.push(top.playerId);
       s.buzzes.shift(); // the next player in the queue is now on the hook
+      this.#noteRuling(false);
     }
+  }
+
+  /** Record a verdict so every screen can react without inferring it. */
+  #noteRuling(correct: boolean) {
+    const seq = (this.#state.lastRuling?.seq ?? 0) + 1;
+    this.#state.lastRuling = { correct, seq };
   }
 
   #addScore(playerId: string, delta: number) {
@@ -514,6 +551,7 @@ export class JeopardyRoom extends Server<Env> {
   #resetBoard() {
     const s = this.#state;
     s.final = null;
+    s.results = null;
     s.used = [];
     s.open = null;
     s.openedAt = null;

@@ -21,7 +21,10 @@ export type Cue =
   | "dailyDouble"
   | "finalThink"
   | "reveal"
-  | "join";
+  | "join"
+  | "drumroll"
+  | "placeReveal"
+  | "fanfare";
 
 /** Optional real audio, keyed by cue. Anything set here wins over the synth. */
 const files = new Map<Cue, string>();
@@ -184,6 +187,31 @@ const SYNTH: Record<Cue, (a: AudioContext) => void> = {
   },
   join: (a) => {
     tone(a, { freq: 880, length: 0.1, gain: 0.1, type: "sine" });
+  },
+  // Accelerating low hits under the standings — tension, then release.
+  drumroll: (a) => {
+    for (let i = 0; i < 22; i++) {
+      const t = i / 22;
+      tone(a, {
+        freq: 92 + Math.random() * 22,
+        start: t * t * 1.5,
+        length: 0.05,
+        gain: 0.05 + t * 0.1,
+        type: "triangle",
+      });
+    }
+  },
+  // Each place landing: a firm hit, not a jingle.
+  placeReveal: (a) => {
+    tone(a, { freq: 196, from: 330, length: 0.24, gain: 0.2, type: "triangle" });
+    noise(a, { length: 0.16, gain: 0.05 });
+  },
+  // The winner. The only cue allowed to be triumphant.
+  fanfare: (a) => {
+    const notes = [523.25, 659.25, 783.99, 1046.5];
+    notes.forEach((f, i) => tone(a, { freq: f, start: i * 0.11, length: 0.34, gain: 0.16, type: "triangle" }));
+    tone(a, { freq: 1046.5, start: 0.44, length: 0.9, gain: 0.19, type: "triangle" });
+    tone(a, { freq: 1567.98, start: 0.44, length: 0.9, gain: 0.09, type: "sine" });
   },
 };
 

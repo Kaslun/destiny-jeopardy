@@ -211,6 +211,24 @@ server-side, not merely hidden.
 board survive, only the live clue is cleared. Useful between rounds, or when
 someone arrives late.
 
+## The results screen
+
+**★ Final standings** ends the game on a reveal rather than a scoreboard. Places
+come out **worst first**, one at a time, host-paced — the board fills from the
+bottom and the top slot stays conspicuously empty, so everyone can see how much
+is still unclaimed. That gap is where the tension lives; a table that simply
+appeared would carry none of it.
+
+Unrevealed places show as `• • • • •` with no rank and no score. The winner gets
+a separate treatment: a larger card, light spilling out from behind it, and the
+only triumphant sound in the game.
+
+Every phone follows along — players see their own placing land, and the winner's
+screen says so — so nobody is staring at a dead buzzer during the reveal.
+
+It works with or without a final round, ties share a rank, and the board is
+closed server-side while the standings are up.
+
 ## Clue timers
 
 Each clue is one of three things, set in the editor:
@@ -263,10 +281,40 @@ Cues are **synthesised with WebAudio**, not shipped as files — the game makes
 noise with no assets to host, nothing to license, and nothing extra to download
 onto a phone.
 
-- The **TV is the room's speaker**: clue open, Daily Double, buzz, reveal, final
-  clue, and time-up.
+Twelve cues, defined in `lib/sound.ts`:
+
+| Cue | Fires when | Plays on |
+| --- | --- | --- |
+| `clueOpen` | a clue goes live | TV |
+| `buzz` | the first buzz lands / your own buzz registers | TV, phone |
+| `correct` | the host rules correct / you turn out to be first in | TV, phone |
+| `wrong` | the host rules wrong | TV |
+| `timeUp` | the clock runs out with nobody in | TV |
+| `dailyDouble` | a Daily Double opens and the wager begins | TV |
+| `finalThink` | the final clue appears | TV |
+| `reveal` | the host reveals the answer | TV |
+| `join` | someone joins the lobby | TV |
+| `drumroll` | the closing standings open | TV |
+| `placeReveal` | each place is revealed | TV |
+| `fanfare` | the winner is revealed | TV |
+
+The arc through the standings is deliberate: an accelerating roll while the
+board is still empty, a firm hit per place, and a fanfare kept for the winner
+alone. It is the only triumphant sound in the game, which is what makes it land.
+
+Verdict sounds come from `RoomState.lastRuling` rather than being inferred on
+each screen. A wrong answer looks different in every mode — an ordinary clue
+grows `spent`, a Daily Double simply closes exactly as a correct one does, and
+the final round marks an entry — so the room states its verdict and every screen
+reacts the same way. It carries a sequence number, so two wrong answers in a row
+are two sounds rather than one.
+
+Who makes noise:
+
+- The **TV is the room's speaker** and plays everything above.
 - **Phones only confirm your own actions** — your buzz, and being first. A room
-  of phones echoing the TV would be chaos. They vibrate too, where supported.
+  of phones echoing the TV would be chaos. They vibrate too where supported, with
+  different patterns for "your buzz landed" and "you were first".
 - The **host console stays silent**; it sits next to the TV.
 - Mute is a toggle on the TV and persists per browser.
 
@@ -274,11 +322,13 @@ Browsers refuse to start audio before the user interacts with the page, so the
 first click or key press anywhere unlocks it. On a TV left untouched, press the
 mute button once.
 
-Swapping in real recordings needs no new plumbing:
+Swapping in real recordings needs no new plumbing — a file set here wins over the
+synth for that cue, and everything else keeps working:
 
 ```ts
 import { setSoundFile } from "@/lib/sound";
-setSoundFile("buzz", "/sounds/buzz.mp3"); // anything set here wins over the synth
+setSoundFile("buzz", "/sounds/buzz.mp3");
+setSoundFile("fanfare", "/sounds/fanfare.mp3");
 ```
 
 ## Not built yet
