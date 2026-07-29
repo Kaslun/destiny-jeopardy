@@ -6,10 +6,14 @@ import { SOUND_FILES, SOUND_GAIN } from "./sounds.config";
 /**
  * Room audio.
  *
- * Every cue is synthesised with WebAudio rather than shipped as a file, so the
- * game makes noise with no assets to host, no licensing to worry about, and
- * nothing extra to download onto a phone. Swapping in real recordings later is
- * a one-liner per cue — see `setSoundFile`.
+ * Every cue has a synthesised WebAudio fallback, so the game makes noise with no
+ * assets at all. Real recordings are opt-in per cue via `lib/sounds.config.ts`:
+ * anything listed there is fetched and decoded on the first interaction and
+ * played from memory, and anything absent keeps its synth.
+ *
+ * Nothing can be heard until the user interacts with the page — browsers refuse
+ * to start audio otherwise. A TV is never touched, so surfaces should show the
+ * `SoundGate` prompt while `audioReady()` is false rather than appearing mute.
  */
 
 export type Cue =
@@ -98,6 +102,17 @@ export function unlockAudio(): void {
   // The first interaction is also the first moment we can decode, since an
   // AudioContext cannot exist before it.
   preloadSounds();
+}
+
+/**
+ * Whether audio can actually be heard right now.
+ *
+ * A TV is the one screen nobody ever touches, so its AudioContext stays
+ * suspended indefinitely and every cue is silently dropped. Surfaces use this
+ * to show a prompt rather than appearing broken.
+ */
+export function audioReady(): boolean {
+  return !!ctx && ctx.state === "running";
 }
 
 // Anything listed in the config is registered on load; decoding waits for the
@@ -244,12 +259,27 @@ export interface SoundControls {
   muted: boolean;
   setMuted: (muted: boolean) => void;
   play: (cue: Cue) => void;
+  /** False until a user gesture has let the browser start audio. */
+  ready: boolean;
+  /** Unlock from a real click — safe to call repeatedly. */
+  enable: () => void;
   /** Fires a cue only when `when` flips from false to true. */
   useCueOn: (when: boolean, cue: Cue) => void;
 }
 
 export function useSound(enabledByDefault = true): SoundControls {
   const [muted, setMutedState] = useState(!enabledByDefault);
+  const [ready, setReady] = useState(false);
+
+  // Poll until audio is genuinely running. Cheap, stops as soon as it is, and
+  // catches the case where the context resumes without us being told.
+  useEffect(() => {
+    if (ready) return;
+    const id = setInterval(() => {
+      if (audioReady()) setReady(true);
+    }, 400);
+    return () => clearInterval(id);
+  }, [ready]);
 
   useEffect(() => {
     try {
@@ -296,5 +326,10 @@ export function useSound(enabledByDefault = true): SoundControls {
     }, [when, cue]);
   };
 
-  return { muted, setMuted, play, useCueOn };
+  const enable = useCallback(() => {
+    unlockAudio();
+    if (audioReady()) setReady(true);
+  }, []);
+
+  return { muted, setMuted, ready, enable, play, useCueOn };
 }

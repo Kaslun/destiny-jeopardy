@@ -20,7 +20,7 @@ export const SOUND_FILES: Partial<Record<Cue, string>> = {
    clueOpen: "/sounds/clueOpen.wav",
    timeUp: "/sounds/timeUp.wav",
    dailyDouble: "/sounds/dailyDouble.wav",
-   finalThink: "/sounds/finalThink.wav",
+   finalThink: "/sounds/finalThink.mp3",
    reveal: "/sounds/reveal.wav",
    join: "/sounds/join.wav",
 };

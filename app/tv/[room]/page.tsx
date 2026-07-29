@@ -7,6 +7,7 @@ import { Score } from "../../../components/Score";
 import { ClueMedia } from "../../../components/ClueMedia";
 import { Lobby } from "../../../components/Lobby";
 import { Results } from "../../../components/Results";
+import { SoundGate } from "../../../components/SoundGate";
 import { useSound } from "../../../lib/sound";
 import { useCountdown } from "../../../lib/useCountdown";
 import { useRole } from "../../../lib/useRoom";
@@ -71,19 +72,40 @@ export default function TvBoard() {
     lastPlacesOut.current = placesOut;
   }, [placesOut, totalPlaces, results, sound]);
 
+  // Shown on every TV view until audio is genuinely running. The lobby matters
+  // most: that is where the TV sits, untouched, before anyone plays.
+  const gate = !sound.muted && !sound.ready ? (
+    <SoundGate onEnable={sound.enable} onMute={() => sound.setMuted(true)} />
+  ) : null;
+
   if (state?.results) {
-    return <Results state={state} />;
+    return (
+      <>
+        <Results state={state} />
+        {gate}
+      </>
+    );
   }
 
   // The lobby stands in for the board until the host starts, and it also covers
   // "no board loaded yet" — both are the same thing from the room's point of
   // view: we are waiting, here is how to join.
   if (state && !state.started) {
-    return <Lobby state={state} room={room} />;
+    return (
+      <>
+        <Lobby state={state} room={room} />
+        {gate}
+      </>
+    );
   }
 
   if (!state?.game) {
-    return <Waiting room={room} connected={connected} hasState={!!state} />;
+    return (
+      <>
+        <Waiting room={room} connected={connected} hasState={!!state} />
+        {gate}
+      </>
+    );
   }
 
   const { game, players, used, open, buzzes, revealed, openedAt, timerSeconds, phase, dd, final } = state;
@@ -548,6 +570,7 @@ export default function TvBoard() {
           </div>
         </div>
       )}
+      {gate}
     </main>
   );
 }

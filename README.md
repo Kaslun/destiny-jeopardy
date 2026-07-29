@@ -318,18 +318,32 @@ Who makes noise:
 - The **host console stays silent**; it sits next to the TV.
 - Mute is a toggle on the TV and persists per browser.
 
-Browsers refuse to start audio before the user interacts with the page, so the
-first click or key press anywhere unlocks it. On a TV left untouched, press the
-mute button once.
+### Using real audio files
 
-Swapping in real recordings needs no new plumbing — a file set here wins over the
-synth for that cue, and everything else keeps working:
+Drop files into `public/sounds/` and point their cues at them in
+**`lib/sounds.config.ts`**. Anything left out keeps its synthesised version, so
+you can replace the set one sound at a time and the game always makes noise.
+`SOUND_GAIN` trims a file that is mastered louder than the rest.
 
-```ts
-import { setSoundFile } from "@/lib/sound";
-setSoundFile("buzz", "/sounds/buzz.mp3");
-setSoundFile("fanfare", "/sounds/fanfare.mp3");
-```
+Files are fetched and decoded once, on the first interaction, then played from
+memory — a buzzer that waits on a network round trip is a broken buzzer. A
+missing or unplayable file logs a warning and falls back to its synth rather than
+going silent.
+
+`public/sounds/README.md` covers what each cue should sound like, where to find
+CC0 sources, and why the real *Think!* music should not go into anything you
+deploy.
+
+### Audio has to be switched on
+
+Browsers refuse to start audio until someone interacts with the page — and **a TV
+is the one screen nobody ever touches**, so it would otherwise sit there silently
+dropping every cue.
+
+Every TV view therefore shows a **Turn on sound** prompt until audio is genuinely
+running, with a *Play silent* option next to it. One click at the start of the
+night is all it needs. Phones and the host console unlock on their first tap
+anyway.
 
 ## Not built yet
 
