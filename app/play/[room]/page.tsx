@@ -62,6 +62,15 @@ export default function PhoneBuzzer() {
   // Drives the ring that leaves the button on press.
   const [wave, setWave] = useState(0);
 
+  // Every hook must live above the early returns below. This screen returns
+  // early for the name gate, the standings and the lobby, so a hook placed
+  // after them runs on some renders and not others — which is React error #310.
+  const final = state?.final ?? null;
+  const finalTimer = useCountdown(
+    final?.phase === "clue" && !final.writingClosed && state?.timed ? (state?.openedAt ?? null) : null,
+    state?.timerSeconds ?? 30,
+  );
+
   const commitName = () => {
     const next = { name: draft.name.trim().toUpperCase() || "GUARDIAN", cls: draft.cls.trim().toUpperCase() };
     setName(next.name);
@@ -246,11 +255,6 @@ export default function PhoneBuzzer() {
     );
   }
 
-  const final = state?.final ?? null;
-  const finalTimer = useCountdown(
-    final?.phase === "clue" && !final.writingClosed && state?.timed ? (state?.openedAt ?? null) : null,
-    state?.timerSeconds ?? 30,
-  );
   if (final && you) {
     const entry = final.entries[you] ?? null;
     return (
@@ -349,32 +353,17 @@ export default function PhoneBuzzer() {
         </div>
         <div style={{ flex: 1 }} />
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".2em", color: "#8b95ab" }}>SCORE</div>
+          <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".2em", color: "#8b95ab" }}>YOUR SCORE</div>
+          {/* Only ever your own — the rest of the room is on the big screen. */}
           <Score
             value={me?.score ?? 0}
             positiveColor={C.gold}
-            style={{ fontFamily: mono, fontSize: 22, fontWeight: 600 }}
+            style={{ fontFamily: mono, fontSize: 30, fontWeight: 600, lineHeight: 1.1 }}
           />
         </div>
       </header>
 
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 30, width: "100%" }}>
-        {/* Your own score, big enough to read without looking up at the TV.
-            Deliberately only yours — the rest of the room is on the big screen. */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "baseline",
-            gap: 12,
-            padding: "10px 18px",
-            background: "rgba(255,255,255,.04)",
-            border: `1px solid ${C.lineSoft}`,
-          }}
-        >
-          <span style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".22em", color: C.dim }}>YOUR SCORE</span>
-          <Score value={me?.score ?? 0} positiveColor={C.gold} style={{ fontFamily: mono, fontSize: 24, fontWeight: 600 }} />
-        </div>
-
         <div
           key={hint}
           className="anim-pop"

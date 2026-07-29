@@ -387,6 +387,17 @@ export class JeopardyRoom extends Server<Env> {
         if (msg.name) existing.name = msg.name.slice(0, 24);
         if (msg.cls) existing.cls = msg.cls.slice(0, 24);
         playerId = existing.id;
+      } else {
+        // Make room by dropping people who have already left. Without this a
+        // roster silently fills with ghosts from earlier sessions on the same
+        // code, and the next real player is told the room is full.
+        if (this.#state.players.length >= MAX_PLAYERS) {
+          this.#state.players = this.#state.players.filter((p) => p.connected);
+        }
+      }
+
+      if (existing) {
+        /* handled above */
       } else if (this.#state.players.length < MAX_PLAYERS) {
         const id = msg.playerId?.slice(0, 40) || crypto.randomUUID();
         this.#state.players.push({
@@ -665,8 +676,13 @@ export class JeopardyRoom extends Server<Env> {
    */
   async #persist() {
     try {
+      const now = Date.now();
+      // Kept in memory as well as in storage: this object stays warm between
+      // sessions, so the staleness check would otherwise keep reading the value
+      // loaded on first wake — usually 0 — and never expire anything.
+      this.#lastActivity = now;
       await this.ctx.storage.put("state", this.#state);
-      await this.ctx.storage.put("lastActivity", Date.now());
+      await this.ctx.storage.put("lastActivity", now);
     } catch (err) {
       // Housekeeping must never take a live game down with it.
       console.error("[room] could not persist", err);
