@@ -14,15 +14,15 @@ import type { Cue } from "./sound";
  * to find them.
  */
 export const SOUND_FILES: Partial<Record<Cue, string>> = {
-  // buzz: "/sounds/buzz.mp3",
-  // correct: "/sounds/correct.mp3",
-  // wrong: "/sounds/wrong.mp3",
-  // clueOpen: "/sounds/clue-open.mp3",
-  // timeUp: "/sounds/time-up.mp3",
-  // dailyDouble: "/sounds/daily-double.mp3",
-  // finalThink: "/sounds/final-think.mp3",
-  // reveal: "/sounds/reveal.mp3",
-  // join: "/sounds/join.mp3",
+   buzz: "/sounds/buzz.wav",
+   correct: "/sounds/correct.wav",
+   wrong: "/sounds/wrong.wav",
+   clueOpen: "/sounds/clueOpen.wav",
+   timeUp: "/sounds/timeUp.wav",
+   dailyDouble: "/sounds/dailyDouble.wav",
+   finalThink: "/sounds/finalThink.wav",
+   reveal: "/sounds/reveal.wav",
+   join: "/sounds/join.wav",
 };
 
 /**
@@ -30,6 +30,6 @@ export const SOUND_FILES: Partial<Record<Cue, string>> = {
  * commonly the buzzer, which tends to be recorded hot.
  */
 export const SOUND_GAIN: Partial<Record<Cue, number>> = {
-  // buzz: 0.9,
-  // finalThink: 0.5,
+   buzz: 0.9,
+   finalThink: 0.5,
 };
