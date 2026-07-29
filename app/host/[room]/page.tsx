@@ -18,6 +18,7 @@ export default function HostConsole() {
   const [code, setCode] = useState("");
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
   // The host sits next to the TV, so this screen stays silent unless asked.
   const timer = useCountdown(state?.openedAt ?? null, state?.timerSeconds ?? 20);
 
@@ -900,6 +901,24 @@ export default function HostConsole() {
                 ↩ BACK TO LOBBY
               </button>
             )}
+            <button
+              onClick={() => {
+                if (confirmClose) {
+                  send({ type: "closeRoom" });
+                  setConfirmClose(false);
+                } else setConfirmClose(true);
+              }}
+              onBlur={() => setConfirmClose(false)}
+              className="tap"
+              style={{
+                ...flatBtn,
+                color: confirmClose ? "#0a0d14" : C.orange,
+                background: confirmClose ? C.orange : "#141b28",
+                borderColor: C.orange,
+              }}
+            >
+              {confirmClose ? "TAP AGAIN — WIPES THIS ROOM" : "✕ CLOSE ROOM"}
+            </button>
             {game?.final && !final && started && (
               <button
                 onClick={() => send({ type: "startFinal" })}
