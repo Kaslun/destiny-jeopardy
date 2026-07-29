@@ -160,7 +160,9 @@ export function Results({ state }: { state: RoomState }) {
                     position: "absolute",
                     inset: 0,
                     background: "linear-gradient(105deg, transparent 35%, rgba(255,255,255,.45) 50%, transparent 65%)",
-                    animation: "sheen 1.8s var(--snap) .7s",
+                    // `both` keeps the band off-screen before and after the
+                    // sweep; without it it ends parked over the name.
+                    animation: "sheen 1.8s var(--snap) .7s both",
                   }}
                 />
               </div>

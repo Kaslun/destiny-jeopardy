@@ -331,6 +331,37 @@ export default function Editor({ slug }: { slug?: string }) {
                 style={{ ...input, color: C.cyan, fontWeight: 600 }}
               />
             </Field>
+            <Field label="TIME TO WRITE">
+              <button
+                onClick={() => emit({ type: "finalTimerOff", value: !game.final?.timerOff })}
+                style={{
+                  ...btn,
+                  padding: "9px",
+                  fontSize: 10,
+                  fontWeight: 600,
+                  color: game.final?.timerOff ? "#0a0d14" : C.text,
+                  background: game.final?.timerOff ? C.orange : "#141b28",
+                  borderColor: game.final?.timerOff ? C.orange : "#2f3a4f",
+                }}
+              >
+                {game.final?.timerOff ? "⏸ NO TIMER" : "⏱ TIMED"}
+              </button>
+              {!game.final?.timerOff && (
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+                  <Synced
+                    value={game.final?.seconds ? String(game.final.seconds) : ""}
+                    onCommit={(raw) => {
+                      const n = Number(raw.replace(/[^0-9]/g, ""));
+                      emit({ type: "finalSeconds", value: raw.trim() === "" || !n ? null : n });
+                    }}
+                    placeholder={`${boardSeconds} (BOARD DEFAULT)`}
+                    style={{ ...input, flex: 1, fontFamily: mono, fontSize: 12 }}
+                  />
+                  <span style={{ fontFamily: mono, fontSize: 10, color: C.faint }}>SEC</span>
+                </div>
+              )}
+            </Field>
+
             <Field label="MEDIA">
               {game.final?.mediaKey ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

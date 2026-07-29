@@ -49,6 +49,10 @@ export interface FinalClue {
   media?: Media;
   mediaKey?: string;
   mediaLabel?: string;
+  /** How long everyone gets to write. Falls back to the board default. */
+  seconds?: number;
+  /** No clock at all — the host decides when pens are down. */
+  timerOff?: boolean;
 }
 
 /** Fallback when neither the clue nor the board sets a time. */
@@ -175,6 +179,8 @@ export interface FinalEntry {
 
 export interface FinalRound {
   phase: FinalPhase;
+  /** Set once writing is over — by the clock, by everyone finishing, or by the host. */
+  writingClosed: boolean;
   /** Player ids in reveal order, lowest score first. Fixed when the round starts. */
   order: string[];
   entries: Record<string, FinalEntry>;
@@ -256,6 +262,8 @@ export type ClientMessage =
   | { type: "endFinal" }
   | { type: "setFinalWager"; wager: number }
   | { type: "setFinalResponse"; response: string }
+  /** Host: call pens down early, before the clock runs out. */
+  | { type: "closeFinalWriting" }
   | { type: "lockFinal" }
   /** Host: rule on the player currently being revealed. */
   | { type: "judgeFinal"; correct: boolean }
@@ -264,7 +272,12 @@ export type ClientMessage =
   /** Host: reveal the next place, worst to best. */
   | { type: "revealNextPlace" }
   /** Host: leave the standings and go back to the board. */
-  | { type: "endResults" };
+  | { type: "endResults" }
+  /** Host: wipe the room entirely so its code starts fresh next time. */
+  | { type: "closeRoom" };
+
+/** A room untouched for this long is deleted. */
+export const ROOM_TTL_MS = 12 * 60 * 60 * 1000;
 
 export type ServerMessage =
   | { type: "state"; state: RoomState; you: string | null }
@@ -371,6 +384,8 @@ export function parseGame(raw: unknown): Game | null {
           a: String(f.a ?? ""),
           ...(fMedia ? { media: fMedia, mediaLabel: String(f.mediaLabel ?? "") } : {}),
           ...(fMedia && fKey ? { mediaKey: fKey } : {}),
+          ...(typeof f.seconds === "number" && f.seconds > 0 ? { seconds: clampSeconds(f.seconds) } : {}),
+          ...(f.timerOff ? { timerOff: true as const } : {}),
         }
       : undefined;
 
@@ -409,6 +424,8 @@ export type BoardOp =
   | { type: "value"; row: number; value: number }
   | { type: "final"; field: "category" | "t" | "a" | "mediaLabel"; value: string }
   | { type: "finalMedia"; value: Media | null; key?: string | null }
+  | { type: "finalSeconds"; value: number | null }
+  | { type: "finalTimerOff"; value: boolean }
   /** Per-clue time. `value: null` falls back to the board default. */
   | { type: "clueSeconds"; catId: string; row: number; value: number | null }
   | { type: "clueTimerOff"; catId: string; row: number; value: boolean }
@@ -499,6 +516,20 @@ export function applyBoardOp(game: Game, op: BoardOp): Game {
         delete next.mediaKey;
         delete next.mediaLabel;
       }
+      return { ...game, final: next };
+    }
+
+    case "finalSeconds": {
+      const next: FinalClue = { category: "", t: "", a: "", ...(game.final ?? {}) };
+      if (op.value === null) delete next.seconds;
+      else next.seconds = clampSeconds(op.value);
+      return { ...game, final: next };
+    }
+
+    case "finalTimerOff": {
+      const next: FinalClue = { category: "", t: "", a: "", ...(game.final ?? {}) };
+      if (op.value) next.timerOff = true;
+      else delete next.timerOff;
       return { ...game, final: next };
     }
 

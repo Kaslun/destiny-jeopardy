@@ -6,6 +6,7 @@ import { C, mono, money, tintFor } from "../../../lib/theme";
 import { Score } from "../../../components/Score";
 import { useRole } from "../../../lib/useRoom";
 import { useSound } from "../../../lib/sound";
+import { useCountdown } from "../../../lib/useCountdown";
 import { standings, type FinalEntry, type FinalPhase } from "../../../shared/protocol";
 
 /** 1st, 2nd, 3rd, 4th … */
@@ -246,6 +247,10 @@ export default function PhoneBuzzer() {
   }
 
   const final = state?.final ?? null;
+  const finalTimer = useCountdown(
+    final?.phase === "clue" && !final.writingClosed && state?.timed ? (state?.openedAt ?? null) : null,
+    state?.timerSeconds ?? 30,
+  );
   if (final && you) {
     const entry = final.entries[you] ?? null;
     return (
@@ -255,6 +260,10 @@ export default function PhoneBuzzer() {
         score={me?.score ?? 0}
         category={state?.game?.final?.category ?? ""}
         clue={final.phase === "wager" ? "" : (state?.game?.final?.t ?? "")}
+        writingClosed={final.writingClosed}
+        secondsLeft={
+          final.phase === "clue" && !final.writingClosed && state?.timed ? finalTimer.remaining : null
+        }
         beingRevealed={final.phase === "reveal" ? final.order[final.revealIndex] === you : false}
         onWager={(wager) => send({ type: "setFinalWager", wager })}
         onResponse={(response) => send({ type: "setFinalResponse", response })}
@@ -350,6 +359,22 @@ export default function PhoneBuzzer() {
       </header>
 
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 30, width: "100%" }}>
+        {/* Your own score, big enough to read without looking up at the TV.
+            Deliberately only yours — the rest of the room is on the big screen. */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 12,
+            padding: "10px 18px",
+            background: "rgba(255,255,255,.04)",
+            border: `1px solid ${C.lineSoft}`,
+          }}
+        >
+          <span style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".22em", color: C.dim }}>YOUR SCORE</span>
+          <Score value={me?.score ?? 0} positiveColor={C.gold} style={{ fontFamily: mono, fontSize: 24, fontWeight: 600 }} />
+        </div>
+
         <div
           key={hint}
           className="anim-pop"
@@ -415,6 +440,11 @@ export default function PhoneBuzzer() {
                 zIndex: -1,
               }}
             />
+          )}
+          {/* Unmistakable at a glance that the button is dead — a greyed-out
+              circle alone reads as "maybe it's broken". */}
+          {!canBuzz && !isFirst && (
+            <div style={{ fontSize: "clamp(26px,9vw,44px)", lineHeight: 1, opacity: 0.85 }}>🔒</div>
           )}
           <div
             key={`${isFirst}-${myIndex}`}
@@ -487,6 +517,8 @@ function FinalScreen({
   score,
   category,
   clue,
+  writingClosed,
+  secondsLeft,
   beingRevealed,
   onWager,
   onResponse,
@@ -496,6 +528,8 @@ function FinalScreen({
   score: number;
   category: string;
   clue: string;
+  writingClosed: boolean;
+  secondsLeft: number | null;
   beingRevealed: boolean;
   onWager: (wager: number) => void;
   onResponse: (response: string) => void;
@@ -626,20 +660,45 @@ function FinalScreen({
     return shell(
       <>
         <div style={{ fontSize: 22, fontWeight: 500, lineHeight: 1.35 }}>{clue}</div>
-        <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: "#6b7488" }}>YOUR RESPONSE</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: "#6b7488", flex: 1 }}>
+            YOUR RESPONSE
+          </div>
+          {secondsLeft !== null && (
+            <div
+              className={secondsLeft <= 5 ? "anim-urgent" : undefined}
+              style={{
+                fontFamily: mono,
+                fontSize: 20,
+                fontWeight: 600,
+                fontVariantNumeric: "tabular-nums",
+                color: secondsLeft <= 5 ? C.gold : C.violet,
+              }}
+            >
+              {secondsLeft}s
+            </div>
+          )}
+        </div>
         <input
           value={answerDraft}
           onChange={(e) => {
             setAnswerDraft(e.target.value);
             onResponse(e.target.value);
           }}
-          placeholder="What is …?"
+          placeholder={writingClosed ? "PENS DOWN" : "What is …?"}
           maxLength={200}
           autoFocus
-          style={{ padding: "16px 18px", fontSize: 20, fontWeight: 600, border: `2px solid ${C.violet}` }}
+          disabled={writingClosed}
+          style={{
+            padding: "16px 18px",
+            fontSize: 20,
+            fontWeight: 600,
+            border: `2px solid ${writingClosed ? C.line : C.violet}`,
+            opacity: writingClosed ? 0.6 : 1,
+          }}
         />
-        <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".18em", color: C.faint, lineHeight: 2 }}>
-          SAVED AS YOU TYPE · YOU RISKED {money(entry.wager ?? 0)}
+        <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".18em", color: writingClosed ? C.orange : C.faint, lineHeight: 2 }}>
+          {writingClosed ? "PENS DOWN · LOCKED IN" : "SAVED AS YOU TYPE"} · YOU RISKED {money(entry.wager ?? 0)}
         </div>
       </>,
     );

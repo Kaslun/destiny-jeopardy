@@ -33,6 +33,14 @@ export default function TvBoard() {
   sound.useCueOn(anyBuzz, "buzz");
   sound.useCueOn(!!state?.revealed, "reveal");
   sound.useCueOn(finalClueUp, "finalThink");
+
+  // The think music stops when the writing does — whether that is the clock
+  // running out, everyone finishing early, or the round moving on. Leaving a
+  // 30-second bed playing over the reveal is what makes it feel amateur.
+  const writingOver = !finalClueUp || state?.final?.writingClosed === true;
+  useEffect(() => {
+    if (writingOver) sound.stop("finalThink", 1.4);
+  }, [writingOver, sound]);
   // Only when a clue is genuinely live and nobody got in.
   sound.useCueOn(timed && clueLive && timer.expired && !anyBuzz, "timeUp");
 
@@ -584,6 +592,8 @@ export default function TvBoard() {
  */
 function FinalBoard({ state }: { state: RoomState }) {
   const final = state.final!;
+  const writing = final.phase === "clue" && !final.writingClosed;
+  const timer = useCountdown(writing && state.timed ? state.openedAt : null, state.timerSeconds);
   const clue = state.game?.final;
   const byId = new Map(state.players.map((p) => [p.id, p]));
   const revealedSoFar = final.phase === "done" ? final.order.length : final.revealIndex;
@@ -629,7 +639,7 @@ function FinalBoard({ state }: { state: RoomState }) {
         </div>
       )}
 
-      {final.phase !== "wager" && clue?.mediaKey && clue.media && (
+      {final.phase === "clue" && clue?.mediaKey && clue.media && (
         <div style={{ width: "min(900px, 92%)" }}>
           <ClueMedia
             media={clue.media}
@@ -641,7 +651,10 @@ function FinalBoard({ state }: { state: RoomState }) {
         </div>
       )}
 
-      {final.phase !== "wager" && (
+      {/* The clue owns the screen while people are writing. Once the reveal
+          starts it gives way to the correct response — the standings need the
+          room, and nobody is still reading the question. */}
+      {final.phase === "clue" && (
         <div
           style={{
             fontSize: "clamp(22px,3vw,54px)",
@@ -652,6 +665,36 @@ function FinalBoard({ state }: { state: RoomState }) {
           }}
         >
           {clue?.t}
+        </div>
+      )}
+
+      {(final.phase === "reveal" || final.phase === "done") && (
+        <div style={{ display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
+          <span style={{ fontFamily: mono, fontSize: "clamp(9px,.85vw,13px)", letterSpacing: ".3em", color: C.dim }}>
+            CORRECT RESPONSE
+          </span>
+          <span style={{ fontSize: "clamp(20px,2.4vw,40px)", fontWeight: 700, color: C.cyan }}>{clue?.a}</span>
+        </div>
+      )}
+
+      {final.phase === "clue" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+          <div
+            className={writing && state.timed && !timer.expired && timer.remaining <= 5 ? "anim-urgent" : undefined}
+            style={{
+              fontFamily: mono,
+              fontSize: "clamp(24px,3.2vw,54px)",
+              fontWeight: 600,
+              fontVariantNumeric: "tabular-nums",
+              color: !writing ? C.orange : timer.remaining <= 5 ? C.gold : C.violet,
+              transition: "color .3s var(--snap)",
+            }}
+          >
+            {!state.timed ? "∞" : !writing ? "PENS DOWN" : `${timer.remaining}s`}
+          </div>
+          <div style={{ fontFamily: mono, fontSize: "clamp(10px,.9vw,14px)", letterSpacing: ".26em", color: C.faint }}>
+            {final.order.filter((id) => final.entries[id].response.trim() !== "").length} OF {final.order.length} WRITTEN
+          </div>
         </div>
       )}
 
@@ -700,12 +743,19 @@ function FinalBoard({ state }: { state: RoomState }) {
                     fontFamily: mono,
                     fontSize: "clamp(13px,1.3vw,24px)",
                     fontWeight: 600,
-                    color: (player?.score ?? 0) < 0 ? C.orange : C.gold,
+                    // Masked until this place is called: an unrevealed score
+                    // column lets anyone read the finishing order straight off
+                    // the screen, which is the entire thing being built up to.
+                    color: !(shown || active)
+                      ? "#2f3a4f"
+                      : (player?.score ?? 0) < 0
+                        ? C.orange
+                        : C.gold,
                     minWidth: 100,
                     textAlign: "right",
                   }}
                 >
-                  {money(player?.score ?? 0)}
+                  {shown || active ? money(player?.score ?? 0) : "—"}
                 </div>
               </div>
             );
@@ -737,7 +787,10 @@ function FinalBoard({ state }: { state: RoomState }) {
                 position: "absolute",
                 inset: 0,
                 background: "linear-gradient(105deg, transparent 35%, rgba(255,255,255,.5) 50%, transparent 65%)",
-                animation: "sheen 1.6s var(--snap) .5s",
+                // `both`: hold the off-screen start during the delay and the
+                // off-screen end afterwards. Without it the band parks itself
+                // in the middle of the name once the sweep finishes.
+                animation: "sheen 1.6s var(--snap) .5s both",
               }}
             />
           </div>

@@ -73,6 +73,38 @@ async function preloadCue(cue: Cue): Promise<void> {
   }
 }
 
+/**
+ * Cues that play as a bed rather than a hit.
+ *
+ * These replace themselves instead of layering, and can be faded out — the
+ * final-round think music has to stop when the round does, not run on over the
+ * reveal.
+ */
+const SUSTAINED = new Set<Cue>(["finalThink"]);
+
+/** Whatever is currently sounding for a sustained cue, so it can be faded. */
+const playing = new Map<Cue, { src: AudioBufferSourceNode; gain: GainNode }>();
+
+/** Fade a sustained cue out and stop it. Silent no-op if it isn't playing. */
+export function stopCue(cue: Cue, fadeSeconds = 1.2): void {
+  const node = playing.get(cue);
+  if (!node) return;
+  playing.delete(cue);
+  try {
+    const a = audio();
+    if (!a) return;
+    const now = a.currentTime;
+    const g = node.gain.gain;
+    g.cancelScheduledValues(now);
+    // exponentialRamp cannot reach or start from zero.
+    g.setValueAtTime(Math.max(g.value, 0.0001), now);
+    g.exponentialRampToValueAtTime(0.0001, now + fadeSeconds);
+    node.src.stop(now + fadeSeconds + 0.05);
+  } catch {
+    /* already finished */
+  }
+}
+
 /** Warm every configured cue. Safe to call more than once. */
 export function preloadSounds(): void {
   for (const cue of files.keys()) void preloadCue(cue);
@@ -238,12 +270,23 @@ export function playCue(cue: Cue): void {
 
     const buffer = buffers.get(cue);
     if (buffer) {
+      // A bed replaces itself; hits are allowed to overlap, which is what makes
+      // rapid buzzes sound right.
+      if (SUSTAINED.has(cue)) stopCue(cue, 0.12);
+
       const src = a.createBufferSource();
       const vol = a.createGain();
       src.buffer = buffer;
       vol.gain.value = SOUND_GAIN[cue] ?? 0.85;
       src.connect(vol).connect(a.destination);
       src.start();
+
+      if (SUSTAINED.has(cue)) {
+        playing.set(cue, { src, gain: vol });
+        src.onended = () => {
+          if (playing.get(cue)?.src === src) playing.delete(cue);
+        };
+      }
       return;
     }
 
@@ -259,6 +302,8 @@ export interface SoundControls {
   muted: boolean;
   setMuted: (muted: boolean) => void;
   play: (cue: Cue) => void;
+  /** Fade out a sustained cue such as the final-round music. */
+  stop: (cue: Cue, fadeSeconds?: number) => void;
   /** False until a user gesture has let the browser start audio. */
   ready: boolean;
   /** Unlock from a real click — safe to call repeatedly. */
@@ -331,5 +376,7 @@ export function useSound(enabledByDefault = true): SoundControls {
     if (audioReady()) setReady(true);
   }, []);
 
-  return { muted, setMuted, ready, enable, play, useCueOn };
+  const stop = useCallback((cue: Cue, fadeSeconds?: number) => stopCue(cue, fadeSeconds), []);
+
+  return { muted, setMuted, ready, enable, play, stop, useCueOn };
 }

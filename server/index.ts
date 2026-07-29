@@ -22,6 +22,7 @@ import {
   isTimed,
   MAX_MEDIA_BYTES,
   parseGame,
+  ROOM_TTL_MS,
   secondsFor,
   standings,
   wagerBounds,
@@ -58,12 +59,35 @@ export class JeopardyRoom extends Server<Env> {
   #state: RoomState = emptyRoom();
   #meta = new Map<string, ConnMeta>();
   #loading: Promise<void> | null = null;
+  #lastActivity = 0;
+
+  /**
+   * Discard a room nobody has touched for {@link ROOM_TTL_MS}.
+   *
+   * Checked on every connection rather than only on load: with hibernation off
+   * this object stays resident for as long as anything is open, so a load-time
+   * check would simply never run again. The guarantee that matters is that an
+   * old room code hands you a clean room, not a half-played game from last week.
+   */
+  #expireIfStale(): boolean {
+    if (this.#lastActivity === 0) return false;
+    if (Date.now() - this.#lastActivity < ROOM_TTL_MS) return false;
+
+    console.info(`[room] expired after ${Math.round((Date.now() - this.#lastActivity) / 60000)} min idle`);
+    this.#state = emptyRoom();
+    this.#meta.clear();
+    this.#lastActivity = 0;
+    this.ctx.waitUntil(this.ctx.storage.delete(["state", "lastActivity"]));
+    return true;
+  }
 
   /** Load persisted state once, even if several messages race on startup. */
   #ready(): Promise<void> {
     if (!this.#loading) {
       this.#loading = (async () => {
         const saved = await this.ctx.storage.get<RoomState>("state");
+        this.#lastActivity = (await this.ctx.storage.get<number>("lastActivity")) ?? 0;
+
         if (saved) {
           // Connection-derived fields never survive an eviction; rebuild them
           // from the live sockets rather than trusting what was written.
@@ -81,6 +105,7 @@ export class JeopardyRoom extends Server<Env> {
 
   async onConnect(conn: Connection) {
     await this.#ready();
+    this.#expireIfStale();
     this.#meta.set(conn.id, { role: "tv", playerId: null });
     this.#send(conn, { type: "state", state: this.#state, you: null });
   }
@@ -283,6 +308,7 @@ export class JeopardyRoom extends Server<Env> {
         this.#closeClue();
         s.final = {
           phase: "wager",
+          writingClosed: false,
           // Lowest score first, so the leader is revealed last.
           order: eligible.slice().sort((a, b) => a.score - b.score).map((p) => p.id),
           entries,
@@ -296,6 +322,12 @@ export class JeopardyRoom extends Server<Env> {
       }
       case "judgeFinal": {
         this.#judgeFinal(msg.correct);
+        break;
+      }
+      case "closeFinalWriting": {
+        const final = this.#state.final;
+        if (!final || final.phase !== "clue") return;
+        final.writingClosed = true;
         break;
       }
       case "endFinal": {
@@ -326,6 +358,10 @@ export class JeopardyRoom extends Server<Env> {
       case "endResults": {
         this.#state.results = null;
         break;
+      }
+      case "closeRoom": {
+        await this.#closeRoom();
+        return; // nothing left to broadcast — the room is gone
       }
       default:
         return;
@@ -408,8 +444,21 @@ export class JeopardyRoom extends Server<Env> {
       entry.wager = Math.max(min, Math.min(max, wager));
       entry.locked = true;
     } else if (msg.type === "setFinalResponse") {
-      if (final.phase !== "clue") return;
+      if (final.phase !== "clue" || final.writingClosed) return;
+      // Late writing is refused on the room's own clock, checked on arrival, so
+      // there is no window where an answer slips in after time.
+      if (s.timed && s.openedAt !== null && Date.now() - s.openedAt > s.timerSeconds * 1000) {
+        final.writingClosed = true;
+        this.#commit();
+        return;
+      }
       entry.response = String(msg.response).slice(0, 200);
+
+      // Everyone has written something: stop the clock early rather than
+      // making the room sit through the rest of the music.
+      if (final.order.every((id) => final.entries[id].response.trim() !== "")) {
+        final.writingClosed = true;
+      }
     } else {
       // lockFinal: commit whichever stage the player is in.
       if (final.phase === "wager" && entry.wager === null) entry.wager = 0;
@@ -580,9 +629,53 @@ export class JeopardyRoom extends Server<Env> {
     conn.send(JSON.stringify(msg));
   }
 
+  /**
+   * Wipe the room so its code behaves like a brand new one.
+   *
+   * Connections are closed rather than left hanging: anything still open
+   * reconnects and re-announces itself, so a room closed while phones are still
+   * on screen repopulates honestly instead of stranding them against a player
+   * record that no longer exists.
+   */
+  async #closeRoom() {
+    // Named keys, not deleteAll(): PartyServer keeps its own records in here
+    // (including the name it needs to recover an alarm) and wiping those breaks
+    // the room's expiry afterwards.
+    await this.ctx.storage.delete(["state", "lastActivity"]);
+    await this.ctx.storage.deleteAlarm();
+    this.#state = emptyRoom();
+    this.#meta.clear();
+    this.#loading = null; // a later access re-reads and finds nothing
+    for (const conn of this.getConnections()) {
+      try {
+        conn.close(1000, "room closed");
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  /**
+   * Persist state, stamp the room as used, and keep an expiry alarm pending.
+   *
+   * Held open with `waitUntil` rather than fired and forgotten: a bare
+   * `void`-ed chain of awaits gets cancelled when the request's I/O context
+   * closes, which silently dropped `lastActivity` and left every room
+   * unexpirable.
+   */
+  async #persist() {
+    try {
+      await this.ctx.storage.put("state", this.#state);
+      await this.ctx.storage.put("lastActivity", Date.now());
+    } catch (err) {
+      // Housekeeping must never take a live game down with it.
+      console.error("[room] could not persist", err);
+    }
+  }
+
   /** Persist, then push a fresh snapshot to everyone with their own id attached. */
   #commit() {
-    void this.ctx.storage.put("state", this.#state);
+    this.ctx.waitUntil(this.#persist());
     for (const conn of this.getConnections()) {
       const meta = this.#meta.get(conn.id);
       this.#send(conn, {
