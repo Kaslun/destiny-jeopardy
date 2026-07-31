@@ -1,5 +1,7 @@
 "use client";
 
+import { keyFor } from "./keys";
+import { readJson, writeJson } from "./storage";
 import type { Game } from "../shared/protocol";
 
 const PARTY_HOST = process.env.NEXT_PUBLIC_PARTY_HOST || "127.0.0.1:8787";
@@ -14,10 +16,13 @@ export async function loadBoard(slug: string): Promise<Game> {
 }
 
 export async function saveBoard(slug: string, game: Game): Promise<void> {
-  const res = await fetch(`${BASE}/boards/${encodeURIComponent(slug.toUpperCase())}`, {
+  const code = slug.toUpperCase();
+  const res = await fetch(`${BASE}/boards/${encodeURIComponent(code)}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ game }),
+    // Writing needs the board's key; reading never does. A board created here
+    // mints one on the spot and thereby claims itself.
+    body: JSON.stringify({ game, key: keyFor("edit-key", code) }),
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -35,22 +40,10 @@ export interface BoardRef {
   savedAt: number;
 }
 
-const INDEX_KEY = "guardian-jeopardy/boards";
-
 export function myBoards(): BoardRef[] {
-  try {
-    const raw = localStorage.getItem(INDEX_KEY);
-    return raw ? (JSON.parse(raw) as BoardRef[]) : [];
-  } catch {
-    return [];
-  }
+  return readJson<BoardRef[]>("boards") ?? [];
 }
 
 export function rememberBoard(ref: BoardRef): void {
-  try {
-    const next = [ref, ...myBoards().filter((b) => b.slug !== ref.slug)].slice(0, 30);
-    localStorage.setItem(INDEX_KEY, JSON.stringify(next));
-  } catch {
-    /* storage unavailable — the slug is still shown on screen to copy */
-  }
+  writeJson("boards", [ref, ...myBoards().filter((b) => b.slug !== ref.slug)].slice(0, 30));
 }

@@ -1,5 +1,10 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
+	// Deliberately not renamed alongside the rest of the de-branding. The worker
+	// name is the deployed script's identity: changing it publishes a *second*
+	// worker on a new hostname, stranding every Durable Object — every saved
+	// board and every live room — behind the old one. Rename only as a planned
+	// migration, never as a tidy-up.
 	"name": "guardian-jeopardy-room",
 	"main": "server/index.ts",
 	"compatibility_date": "2026-07-01",
@@ -18,6 +23,13 @@
 				// Saved boards, one object per slug, served over /boards/:slug.
 				"name": "BoardStore",
 				"class_name": "BoardStore"
+			},
+			{
+				// One object for the whole deployment, holding the R2 budget. A
+				// shared ceiling can only be enforced by something that can see
+				// every board at once.
+				"name": "StorageMeter",
+				"class_name": "StorageMeter"
 			}
 		]
 	},
@@ -25,6 +37,10 @@
 		{
 			// Clue images and video. R2 rather than a blob host because egress is
 			// free, which matters when a room full of people loads the same clip.
+			//
+			// Name kept for the same reason as the worker's: a bucket cannot be
+			// renamed, so a new name is a new empty bucket and every uploaded
+			// file 404s until it is copied across.
 			"binding": "MEDIA",
 			"bucket_name": "guardian-jeopardy-media"
 		}
@@ -41,6 +57,12 @@
 			"tag": "v2",
 			"new_sqlite_classes": [
 				"BoardStore"
+			]
+		},
+		{
+			"tag": "v3",
+			"new_sqlite_classes": [
+				"StorageMeter"
 			]
 		}
 	],

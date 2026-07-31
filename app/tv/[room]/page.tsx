@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { useEffect, useRef } from "react";
-import { C, mono, money, tintFor } from "../../../lib/theme";
+import { alpha, C, mono, money, SCENE, tintFor } from "../../../lib/theme";
 import { Score } from "../../../components/Score";
 import { ClueMedia } from "../../../components/ClueMedia";
 import { Lobby } from "../../../components/Lobby";
@@ -11,17 +11,28 @@ import { SoundGate } from "../../../components/SoundGate";
 import { useSound } from "../../../lib/sound";
 import { useCountdown } from "../../../lib/useCountdown";
 import { useRole } from "../../../lib/useRoom";
-import { clueKey, type RoomState } from "../../../shared/protocol";
+import { useTheme } from "../../../lib/useTheme";
+import { clueKey, roundOf, type RoomState } from "../../../shared/protocol";
+import type { Theme } from "../../../lib/themes";
 
 export default function TvBoard() {
   const room = String(useParams().room ?? "").toUpperCase();
   const { state, connected } = useRole(room, "tv");
 
+  // The board decides how the room looks. Applied as a side effect, so every
+  // one of this component's several return paths is covered by one call.
+  const theme = useTheme(state?.game?.theme);
+
   // The TV is the room's speaker — phones stay quiet apart from their own buzz.
   const sound = useSound(true);
-  // An untimed clue is fed a null start, so the countdown never runs at all.
+  // Driven from `shownAt`, always: the read delay and the clue's own clock are
+  // two stretches of one countdown. An untimed clue still has a read delay —
+  // the buzzers open on the same schedule either way — so it is only `expired`
+  // that stops meaning anything, not the whole clock.
   const timed = state?.timed !== false;
-  const timer = useCountdown(timed ? (state?.openedAt ?? null) : null, state?.timerSeconds ?? 20);
+  const timer = useCountdown(state?.shownAt ?? null, state?.timerSeconds ?? 20, state?.readSeconds ?? 0);
+  const reading = timer.waiting;
+  const timeUp = timed && timer.expired;
 
   const clueLive = !!state?.open && state.phase === "buzz";
   const wagering = state?.phase === "wager";
@@ -29,6 +40,10 @@ export default function TvBoard() {
   const finalClueUp = state?.final?.phase === "clue";
 
   sound.useCueOn(clueLive, "clueOpen");
+  // The moment the room is allowed in. Worth its own cue: during a read delay
+  // everyone is watching the clue rather than the clock, and a sound is what
+  // actually starts the race.
+  sound.useCueOn(clueLive && !reading && (state?.readSeconds ?? 0) > 0, "buzzersOpen");
   sound.useCueOn(wagering, "dailyDouble");
   sound.useCueOn(anyBuzz, "buzz");
   sound.useCueOn(!!state?.revealed, "reveal");
@@ -42,7 +57,32 @@ export default function TvBoard() {
     if (writingOver) sound.stop("finalThink", 1.4);
   }, [writingOver, sound]);
   // Only when a clue is genuinely live and nobody got in.
-  sound.useCueOn(timed && clueLive && timer.expired && !anyBuzz, "timeUp");
+  sound.useCueOn(timeUp && clueLive && !anyBuzz, "timeUp");
+
+  /**
+   * The bed under an open board.
+   *
+   * Runs only while the board is on screen with nothing happening — the gap
+   * between clues, which is where a silent room feels flat. It gets out of the
+   * way the moment a clue opens, because a clue is being read aloud over it and
+   * anything underneath is competing with the host's voice.
+   *
+   * Re-armed on a timer rather than looped: the synth bed is a finite burst,
+   * and a `loop` on a source node cannot be faded out cleanly mid-phrase.
+   */
+  const boardIdle = !!state?.started && !state.open && !state.final && !state.results && !!state.game;
+  useEffect(() => {
+    if (!boardIdle) {
+      sound.stop("boardBed", 0.9);
+      return;
+    }
+    sound.play("boardBed");
+    const id = setInterval(() => sound.play("boardBed"), 16000);
+    return () => {
+      clearInterval(id);
+      sound.stop("boardBed", 0.9);
+    };
+  }, [boardIdle, sound]);
 
   // Every ruling gets a verdict sound — right or wrong, board clue, Daily
   // Double or final round. Keyed on the sequence number so two wrong answers in
@@ -89,7 +129,7 @@ export default function TvBoard() {
   if (state?.results) {
     return (
       <>
-        <Results state={state} />
+        <Results state={state} theme={theme} />
         {gate}
       </>
     );
@@ -101,7 +141,7 @@ export default function TvBoard() {
   if (state && !state.started) {
     return (
       <>
-        <Lobby state={state} room={room} />
+        <Lobby state={state} room={room} theme={theme} />
         {gate}
       </>
     );
@@ -116,15 +156,21 @@ export default function TvBoard() {
     );
   }
 
-  const { game, players, used, open, buzzes, revealed, openedAt, timerSeconds, phase, dd, final } = state;
+  const { game, players, used, open, buzzes, revealed, resolved, openedAt, shownAt, readSeconds, timerSeconds, phase, dd, control, final } =
+    state;
+
+  // Everything on this screen is about one round at a time.
+  const board = roundOf(game, state.round);
+  if (!board) return <Waiting room={room} connected={connected} hasState />;
 
   if (final) {
     return <FinalBoard state={state} />;
   }
 
-  const openClue = open ? game.categories[open.c]?.clues[open.r] : null;
+  const openClue = open ? board.categories[open.c]?.clues[open.r] : null;
   const byId = new Map(players.map((p) => [p.id, p]));
   const ddOwner = dd ? (byId.get(dd.playerId) ?? null) : null;
+  const controlName = control ? (byId.get(control)?.name ?? null) : null;
 
   return (
     <main
@@ -136,7 +182,7 @@ export default function TvBoard() {
         flexDirection: "column",
         padding: "clamp(16px,2vw,32px) clamp(20px,2.5vw,40px)",
         gap: "clamp(14px,1.6vw,22px)",
-        background: "radial-gradient(120% 90% at 50% -20%, #17203a 0%, #0a0d16 55%, #06080e 100%)",
+        background: SCENE.board,
       }}
     >
       <header style={{ display: "flex", alignItems: "center", gap: 24, flex: "none" }}>
@@ -144,39 +190,76 @@ export default function TvBoard() {
           style={{
             width: 52,
             height: 52,
-            border: `2px solid ${C.gold}`,
+            border: `2px solid ${C.accent}`,
             transform: "rotate(45deg)",
             display: "grid",
             placeItems: "center",
           }}
         >
-          <div style={{ width: 18, height: 18, background: C.gold }} />
+          <div style={{ width: 18, height: 18, background: C.accent }} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <div style={{ fontFamily: mono, fontSize: "clamp(10px,.85vw,14px)", letterSpacing: ".32em", color: C.dim }}>
-            {game.subtitle || "ROUND 01"}
+          {/* The round's own name, not the game's subtitle — this line is how
+              the room knows the money just doubled. */}
+          <div
+            style={{
+              fontFamily: mono,
+              fontSize: "clamp(10px,.85vw,14px)",
+              letterSpacing: ".32em",
+              color: C.dim,
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+            }}
+          >
+            <span>{board.name || game.subtitle || "ROUND 01"}</span>
+            {game.rounds.length > 1 && (
+              <span style={{ color: C.accent }}>
+                {state.round + 1}/{game.rounds.length}
+              </span>
+            )}
           </div>
           <div style={{ fontSize: "clamp(24px,2.4vw,40px)", fontWeight: 700, letterSpacing: ".05em", lineHeight: 1 }}>
             {game.title}
           </div>
         </div>
         <div style={{ flex: 1 }} />
+        {/* Whose turn it is, on the screen the whole room is already looking
+            at. Board control has always been tracked; until now the only way
+            to know who had it was to remember who answered last. */}
+        {!open && controlName && (
+          <div
+            key={control ?? ""}
+            className="anim-pop"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              padding: "10px 20px",
+              background: alpha(C.accent, 12),
+              border: `1px solid ${C.accent}`,
+            }}
+          >
+            <span style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".24em", color: C.dim }}>PICKS NEXT</span>
+            <span style={{ fontSize: "clamp(15px,1.4vw,26px)", fontWeight: 700, color: C.accent }}>{controlName}</span>
+          </div>
+        )}
         <Badge>
-          <span style={{ color: C.cyan }}>●</span> {players.filter((p) => p.connected).length} CONNECTED
+          <span style={{ color: C.info }}>●</span> {players.filter((p) => p.connected).length} CONNECTED
         </Badge>
         <Badge>
-          ROOM <span style={{ color: C.gold }}>{room}</span>
+          ROOM <span style={{ color: C.accent }}>{room}</span>
         </Badge>
         <button
           onClick={() => sound.setMuted(!sound.muted)}
           title={sound.muted ? "Sound off" : "Sound on"}
           style={{
             padding: "10px 14px",
-            background: "#0e1420",
+            background: C.surfaceDeep,
             border: `1px solid ${C.line}`,
             fontFamily: mono,
             fontSize: 13,
-            color: sound.muted ? C.faint : C.cyan,
+            color: sound.muted ? C.faint : C.info,
           }}
         >
           {sound.muted ? "🔇" : "🔊"}
@@ -188,25 +271,25 @@ export default function TvBoard() {
           flex: 1,
           minHeight: 0,
           display: "grid",
-          gridTemplateColumns: `repeat(${game.categories.length}, 1fr)`,
+          gridTemplateColumns: `repeat(${board.categories.length}, 1fr)`,
           gap: 8,
         }}
       >
-        {game.categories.map((cat, ci) => (
+        {board.categories.map((cat, ci) => (
           <div
             key={ci}
             style={{
               display: "grid",
-              gridTemplateRows: `clamp(52px,6vh,86px) repeat(${game.values.length}, 1fr)`,
+              gridTemplateRows: `clamp(52px,6vh,86px) repeat(${board.values.length}, 1fr)`,
               gap: 8,
               minHeight: 0,
             }}
           >
             <div
               style={{
-                background: "linear-gradient(180deg,#131a28,#0c111b)",
-                border: `1px solid #2a3244`,
-                borderTop: `2px solid ${C.gold}`,
+                background: `linear-gradient(180deg,${C.surface},${C.panel})`,
+                border: `1px solid ${C.edgeSoft}`,
+                borderTop: `2px solid ${C.accent}`,
                 display: "grid",
                 placeItems: "center",
                 padding: "0 10px",
@@ -217,16 +300,16 @@ export default function TvBoard() {
                 {cat.name || "—"}
               </div>
             </div>
-            {game.values.map((value, ri) => {
-              const spent = used.includes(clueKey(ci, ri));
+            {board.values.map((value, ri) => {
+              const spent = used.includes(clueKey(state.round, ci, ri));
               return (
                 <div
                   key={ri}
                   style={{
                     display: "grid",
                     placeItems: "center",
-                    background: spent ? "#0a0e16" : "linear-gradient(180deg,#1b2434,#10161f)",
-                    border: `1px solid ${spent ? "#1a2130" : "#2f3a4f"}`,
+                    background: spent ? C.panelDeep : `linear-gradient(180deg,${C.surface},${C.tile})`,
+                    border: `1px solid ${spent ? C.lineSoft : C.edge}`,
                     clipPath: "polygon(0 0,100% 0,100% 76%,90% 100%,0 100%)",
                   }}
                 >
@@ -240,8 +323,8 @@ export default function TvBoard() {
                       style={{
                         fontSize: "clamp(20px,3vw,60px)",
                         fontWeight: 700,
-                        color: C.gold,
-                        textShadow: "0 0 26px rgba(240,196,105,.28)",
+                        color: C.accent,
+                        textShadow: `0 0 26px ${alpha(C.accent, 28)}`,
                       }}
                     >
                       {value}
@@ -276,9 +359,9 @@ export default function TvBoard() {
               alignItems: "center",
               gap: 14,
               padding: "0 18px",
-              background: "linear-gradient(100deg,#111825,#0b0f18)",
+              background: `linear-gradient(100deg,${C.panel},${C.panelDeep})`,
               border: `1px solid ${C.line}`,
-              borderLeft: `4px solid ${tintFor(i)}`,
+              borderLeft: `4px solid ${tintFor(p.tint ?? i)}`,
               opacity: p.connected ? 1 : 0.45,
               clipPath: "polygon(0 0,100% 0,100% 74%,97% 100%,0 100%)",
             }}
@@ -295,8 +378,8 @@ export default function TvBoard() {
               >
                 {p.name}
               </div>
-              <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: "#7d879c" }}>
-                {p.cls || (p.connected ? "GUARDIAN" : "AWAY")}
+              <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: C.muted }}>
+                {p.cls || (p.connected ? theme.copy.classFallback : "AWAY")}
               </div>
             </div>
             <div style={{ flex: 1 }} />
@@ -316,7 +399,7 @@ export default function TvBoard() {
           style={{
             position: "absolute",
             inset: 0,
-            background: "radial-gradient(110% 70% at 50% 20%, #2a1d47, #08070f 72%)",
+            background: SCENE.dailyDouble,
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
@@ -324,8 +407,8 @@ export default function TvBoard() {
             gap: 30,
           }}
         >
-          <div style={{ fontFamily: mono, fontSize: "clamp(12px,1.2vw,18px)", letterSpacing: ".4em", color: C.violet }}>
-            {game.categories[open.c]?.name}
+          <div style={{ fontFamily: mono, fontSize: "clamp(12px,1.2vw,18px)", letterSpacing: ".4em", color: C.special }}>
+            {board.categories[open.c]?.name}
           </div>
           <div
             style={{
@@ -334,13 +417,13 @@ export default function TvBoard() {
               letterSpacing: ".06em",
               lineHeight: 1,
               color: C.text,
-              textShadow: "0 0 60px rgba(177,140,240,.45)",
+              textShadow: `0 0 60px ${alpha(C.special, 45)}`,
             }}
           >
             DAILY DOUBLE
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-            <div style={{ width: 40, height: 40, border: `2px solid ${C.violet}`, transform: "rotate(45deg)" }} />
+            <div style={{ width: 40, height: 40, border: `2px solid ${C.special}`, transform: "rotate(45deg)" }} />
             <div style={{ fontSize: "clamp(24px,3vw,52px)", fontWeight: 600, letterSpacing: ".04em" }}>
               {ddOwner?.name ?? "—"}
             </div>
@@ -371,21 +454,36 @@ export default function TvBoard() {
           style={{
             position: "absolute",
             inset: 0,
-            background: "linear-gradient(160deg,#0d1526 0%,#080b12 60%,#0b0910 100%)",
+            background: SCENE.clue,
             display: "flex",
             flexDirection: "column",
           }}
         >
-          <div style={{ flex: "none", height: 4, background: "#1a2130" }}>
-            {timed && (
+          {/* One bar, two jobs. While the clue is being read it drains in the
+              "not yet" colour; when the buzzers open it restarts as the clue's
+              own clock. Keyed so each phase animates from full. */}
+          <div style={{ flex: "none", height: 4, background: C.lineSoft }}>
+            {reading ? (
               <div
-                key={openedAt ?? 0}
+                key={`read-${shownAt ?? 0}`}
                 style={{
                   height: "100%",
-                  background: `linear-gradient(90deg,${C.gold},${C.orange})`,
-                  animation: `drain ${timerSeconds}s linear forwards`,
+                  background: `linear-gradient(90deg,${C.info},${C.special})`,
+                  animation: `drain ${readSeconds}s linear forwards`,
                 }}
               />
+            ) : (
+              timed &&
+              !resolved && (
+                <div
+                  key={`live-${openedAt ?? 0}`}
+                  style={{
+                    height: "100%",
+                    background: `linear-gradient(90deg,${C.accent},${C.warn})`,
+                    animation: `drain ${timerSeconds}s linear forwards`,
+                  }}
+                />
+              )
             )}
           </div>
 
@@ -396,30 +494,50 @@ export default function TvBoard() {
               alignItems: "center",
               gap: 18,
               padding: "22px 40px",
-              borderBottom: `1px solid #1c2434`,
+              borderBottom: `1px solid ${C.lineSoft}`,
             }}
           >
-            <div style={{ fontFamily: mono, fontSize: 15, letterSpacing: ".3em", color: C.gold }}>
-              {game.categories[open.c]?.name}
+            <div style={{ fontFamily: mono, fontSize: 15, letterSpacing: ".3em", color: C.accent }}>
+              {board.categories[open.c]?.name}
             </div>
-            <div style={{ fontFamily: mono, fontSize: 15, letterSpacing: ".3em", color: dd ? C.violet : "#9fb0c8" }}>
-              {dd ? `WAGER ${money(dd.wager ?? 0)}` : game.values[open.r]}
+            <div style={{ fontFamily: mono, fontSize: 15, letterSpacing: ".3em", color: dd ? C.special : C.dim }}>
+              {dd ? `WAGER ${money(dd.wager ?? 0)}` : board.values[open.r]}
             </div>
             <div style={{ flex: 1 }} />
             <div
               // Pulses through the last five seconds, so the room feels the
               // clock running out without staring at the number.
-              className={timed && !timer.expired && timer.remaining <= 5 ? "anim-urgent" : undefined}
+              className={
+                !reading && !resolved && timed && !timeUp && timer.remaining <= 5 ? "anim-urgent" : undefined
+              }
               style={{
                 fontFamily: mono,
                 fontSize: 28,
                 fontWeight: 600,
                 fontVariantNumeric: "tabular-nums",
                 transition: "color .2s var(--snap)",
-                color: !timed ? "#3d4a63" : timer.expired ? C.orange : timer.remaining <= 5 ? C.gold : "#6d7791",
+                color: reading
+                  ? C.info
+                  : resolved
+                    ? C.good
+                    : !timed
+                      ? C.dimmer
+                      : timeUp
+                        ? C.warn
+                        : timer.remaining <= 5
+                          ? C.accent
+                          : C.mutedDeep,
               }}
             >
-              {!timed ? "∞" : timer.expired ? "TIME" : `${timer.remaining}s`}
+              {reading
+                ? `BUZZ IN ${timer.waitRemaining}s`
+                : resolved
+                  ? "ANSWERED"
+                  : !timed
+                    ? "∞"
+                    : timeUp
+                      ? "TIME"
+                      : `${timer.remaining}s`}
             </div>
             {openClue.dd && (
               <div
@@ -427,8 +545,8 @@ export default function TvBoard() {
                   fontFamily: mono,
                   fontSize: 13,
                   letterSpacing: ".26em",
-                  color: "#0a0d14",
-                  background: C.orange,
+                  color: C.onAccent,
+                  background: C.warn,
                   padding: "5px 12px",
                 }}
               >
@@ -463,35 +581,40 @@ export default function TvBoard() {
                     height: "clamp(140px,26vh,330px)",
                     display: "grid",
                     placeItems: "center",
-                    border: `1px solid #2a3244`,
+                    border: `1px solid ${C.edgeSoft}`,
                     background:
-                      "repeating-linear-gradient(135deg,#141b28 0px,#141b28 10px,#101620 10px,#101620 20px)",
+                      `repeating-linear-gradient(135deg,${C.surface} 0px,${C.surface} 10px,${C.tile} 10px,${C.tile} 20px)`,
                     fontFamily: mono,
                     fontSize: 14,
                     letterSpacing: ".26em",
-                    color: "#6d7791",
+                    color: C.mutedDeep,
                   }}
                 >
                   {openClue.mediaLabel || `[ ${openClue.media.toUpperCase()} ]`}
                 </div>
               )}
-              <div style={{ fontSize: "clamp(26px,3.6vw,66px)", fontWeight: 500, lineHeight: 1.24 }}>
-                {openClue.t || "—"}
-              </div>
+              {/* Media-only clues are a real thing — "what is this?" over a
+                  photograph. Rendering an em dash under the picture just looks
+                  like the text failed to load. */}
+              {openClue.t.trim() && (
+                <div style={{ fontSize: "clamp(26px,3.6vw,66px)", fontWeight: 500, lineHeight: 1.24 }}>
+                  {openClue.t}
+                </div>
+              )}
               {revealed && (
                 <div
                   style={{
                     display: "flex",
                     alignItems: "center",
                     gap: 18,
-                    borderTop: `1px solid #2a3244`,
+                    borderTop: `1px solid ${C.edgeSoft}`,
                     paddingTop: 24,
                   }}
                 >
                   <div style={{ fontFamily: mono, fontSize: 13, letterSpacing: ".28em", color: C.dim }}>
                     CORRECT RESPONSE
                   </div>
-                  <div style={{ fontSize: "clamp(20px,2.3vw,42px)", fontWeight: 700, color: C.gold }}>
+                  <div style={{ fontSize: "clamp(20px,2.3vw,42px)", fontWeight: 700, color: C.accent }}>
                     {openClue.a || "—"}
                   </div>
                 </div>
@@ -500,17 +623,65 @@ export default function TvBoard() {
 
             <div
               style={{
-                borderLeft: `1px solid #1c2434`,
-                background: "rgba(6,9,16,.6)",
+                borderLeft: `1px solid ${C.lineSoft}`,
+                background: alpha(C.bg, 60),
                 display: "flex",
                 flexDirection: "column",
                 padding: 32,
                 gap: 10,
               }}
             >
-              <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".3em", color: "#7d879c", marginBottom: 12 }}>
-                {dd ? "ANSWERING" : "BUZZ ORDER"}
+              <div
+                style={{
+                  fontFamily: mono,
+                  fontSize: 12,
+                  letterSpacing: ".3em",
+                  color: reading ? C.info : C.muted,
+                  marginBottom: 12,
+                }}
+              >
+                {dd ? "ANSWERING" : reading ? "LISTEN…" : "BUZZ ORDER"}
               </div>
+
+              {/* The whole point of the delay is that the room can see it is
+                  coming. A dead buzzer with no explanation reads as broken. */}
+              {!dd && reading && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "26px 18px",
+                    border: `1px solid ${C.info}`,
+                    background: alpha(C.info, 8),
+                  }}
+                >
+                  <div
+                    style={{
+                      fontFamily: mono,
+                      fontSize: 56,
+                      fontWeight: 600,
+                      fontVariantNumeric: "tabular-nums",
+                      color: C.info,
+                    }}
+                  >
+                    {timer.waitRemaining}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: mono,
+                      fontSize: 11,
+                      letterSpacing: ".26em",
+                      color: C.dim,
+                      textAlign: "center",
+                      lineHeight: 2,
+                    }}
+                  >
+                    UNTIL BUZZERS OPEN
+                  </div>
+                </div>
+              )}
 
               {dd && (
                 <div
@@ -519,13 +690,13 @@ export default function TvBoard() {
                     flexDirection: "column",
                     gap: 8,
                     padding: "18px 20px",
-                    background: "rgba(177,140,240,.12)",
-                    border: `1px solid ${C.violet}`,
+                    background: alpha(C.special, 12),
+                    border: `1px solid ${C.special}`,
                     clipPath: "polygon(0 0,100% 0,100% 70%,95% 100%,0 100%)",
                   }}
                 >
                   <div style={{ fontSize: 26, fontWeight: 600 }}>{ddOwner?.name ?? "—"}</div>
-                  <div style={{ fontFamily: mono, fontSize: 14, letterSpacing: ".2em", color: C.violet }}>
+                  <div style={{ fontFamily: mono, fontSize: 14, letterSpacing: ".2em", color: C.special }}>
                     RISKING {money(dd.wager ?? 0)}
                   </div>
                   <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em", color: C.faint, lineHeight: 1.9 }}>
@@ -534,7 +705,7 @@ export default function TvBoard() {
                 </div>
               )}
 
-              {!dd && buzzes.length === 0 && (
+              {!dd && !reading && buzzes.length === 0 && (
                 <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".2em", color: C.faint, lineHeight: 2 }}>
                   NOBODY IN YET
                 </div>
@@ -549,7 +720,7 @@ export default function TvBoard() {
                     gap: 16,
                     padding: "14px 18px",
                     background: i === 0 ? "rgba(240,196,105,.12)" : "rgba(255,255,255,.025)",
-                    border: `1px solid ${i === 0 ? C.goldDeep : C.line}`,
+                    border: `1px solid ${i === 0 ? C.accentDeep : C.line}`,
                     clipPath: "polygon(0 0,100% 0,100% 70%,95% 100%,0 100%)",
                     // Each entry lands after the one above it.
                     animationDelay: `${i * 60}ms`,
@@ -560,7 +731,7 @@ export default function TvBoard() {
                       fontFamily: mono,
                       fontSize: 22,
                       fontWeight: 600,
-                      color: i === 0 ? C.gold : C.dimmer,
+                      color: i === 0 ? C.accent : C.dimmer,
                       width: 28,
                     }}
                   >
@@ -569,7 +740,7 @@ export default function TvBoard() {
                   <div style={{ fontSize: 22, fontWeight: 600, flex: 1 }}>
                     {byId.get(b.playerId)?.name ?? "—"}
                   </div>
-                  <div style={{ fontFamily: mono, fontSize: 14, color: "#7d879c" }}>
+                  <div style={{ fontFamily: mono, fontSize: 14, color: C.muted }}>
                     {(b.ms / 1000).toFixed(2)}s
                   </div>
                 </div>
@@ -609,10 +780,10 @@ function FinalBoard({ state }: { state: RoomState }) {
         justifyContent: "center",
         gap: "clamp(18px,3vh,36px)",
         padding: "clamp(20px,4vh,56px)",
-        background: "radial-gradient(110% 70% at 50% 15%, #241a44, #07060d 74%)",
+        background: SCENE.final,
       }}
     >
-      <div style={{ fontFamily: mono, fontSize: "clamp(11px,1.1vw,17px)", letterSpacing: ".42em", color: C.violet }}>
+      <div style={{ fontFamily: mono, fontSize: "clamp(11px,1.1vw,17px)", letterSpacing: ".42em", color: C.special }}>
         FINAL ROUND
       </div>
 
@@ -623,7 +794,7 @@ function FinalBoard({ state }: { state: RoomState }) {
           letterSpacing: ".04em",
           textAlign: "center",
           lineHeight: 1.1,
-          textShadow: "0 0 60px rgba(177,140,240,.4)",
+          textShadow: `0 0 60px ${alpha(C.special, 40)}`,
         }}
       >
         {clue?.category || "FINAL"}
@@ -673,7 +844,7 @@ function FinalBoard({ state }: { state: RoomState }) {
           <span style={{ fontFamily: mono, fontSize: "clamp(9px,.85vw,13px)", letterSpacing: ".3em", color: C.dim }}>
             CORRECT RESPONSE
           </span>
-          <span style={{ fontSize: "clamp(20px,2.4vw,40px)", fontWeight: 700, color: C.cyan }}>{clue?.a}</span>
+          <span style={{ fontSize: "clamp(20px,2.4vw,40px)", fontWeight: 700, color: C.info }}>{clue?.a}</span>
         </div>
       )}
 
@@ -686,7 +857,7 @@ function FinalBoard({ state }: { state: RoomState }) {
               fontSize: "clamp(24px,3.2vw,54px)",
               fontWeight: 600,
               fontVariantNumeric: "tabular-nums",
-              color: !writing ? C.orange : timer.remaining <= 5 ? C.gold : C.violet,
+              color: !writing ? C.warn : timer.remaining <= 5 ? C.accent : C.special,
               transition: "color .3s var(--snap)",
             }}
           >
@@ -715,7 +886,7 @@ function FinalBoard({ state }: { state: RoomState }) {
                   gap: 18,
                   padding: "14px 20px",
                   background: active ? "rgba(240,196,105,.12)" : "rgba(255,255,255,.03)",
-                  border: `1px solid ${active ? C.gold : C.line}`,
+                  border: `1px solid ${active ? C.accent : C.line}`,
                   opacity: shown || active ? 1 : 0.45,
                   transform: active ? "scale(1.015)" : "none",
                   transition: "opacity .3s var(--snap), background .3s var(--snap), border-color .3s var(--snap), transform .2s var(--snap)",
@@ -731,7 +902,7 @@ function FinalBoard({ state }: { state: RoomState }) {
                   style={{
                     fontFamily: mono,
                     fontSize: "clamp(12px,1.1vw,20px)",
-                    color: entry.judged === "correct" ? C.green : entry.judged === "wrong" ? C.orange : C.violet,
+                    color: entry.judged === "correct" ? C.good : entry.judged === "wrong" ? C.warn : C.special,
                     minWidth: 90,
                     textAlign: "right",
                   }}
@@ -747,10 +918,10 @@ function FinalBoard({ state }: { state: RoomState }) {
                     // column lets anyone read the finishing order straight off
                     // the screen, which is the entire thing being built up to.
                     color: !(shown || active)
-                      ? "#2f3a4f"
+                      ? C.edge
                       : (player?.score ?? 0) < 0
-                        ? C.orange
-                        : C.gold,
+                        ? C.warn
+                        : C.accent,
                     minWidth: 100,
                     textAlign: "right",
                   }}
@@ -775,7 +946,7 @@ function FinalBoard({ state }: { state: RoomState }) {
               overflow: "hidden",
               fontSize: "clamp(28px,3.6vw,60px)",
               fontWeight: 700,
-              color: C.gold,
+              color: C.accent,
               padding: "0 6px",
             }}
           >
@@ -808,12 +979,12 @@ function Badge({ children }: { children: React.ReactNode }) {
         alignItems: "center",
         gap: 8,
         padding: "10px 18px",
-        background: "#0e1420",
+        background: C.surfaceDeep,
         border: `1px solid ${C.line}`,
         fontFamily: mono,
         fontSize: 13,
         letterSpacing: ".2em",
-        color: "#9fb0c8",
+        color: C.dim,
       }}
     >
       {children}
@@ -828,15 +999,15 @@ function Waiting({ room, connected, hasState }: { room: string; connected: boole
         height: "100dvh",
         display: "grid",
         placeItems: "center",
-        background: "radial-gradient(120% 70% at 50% 0%, #17203a, #05070c 70%)",
+        background: SCENE.landing,
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 22 }}>
-        <div style={{ width: 60, height: 60, border: `2px solid #2f3a4f`, transform: "rotate(45deg)" }} />
+        <div style={{ width: 60, height: 60, border: `2px solid ${C.edge}`, transform: "rotate(45deg)" }} />
         <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: ".05em", color: C.dim }}>
           {!connected ? "CONNECTING…" : hasState ? "WAITING FOR THE HOST TO LOAD A GAME" : "JOINING ROOM…"}
         </div>
-        <div style={{ fontFamily: mono, fontSize: 34, fontWeight: 600, letterSpacing: ".22em", color: C.gold }}>
+        <div style={{ fontFamily: mono, fontSize: 34, fontWeight: 600, letterSpacing: ".22em", color: C.accent }}>
           {room}
         </div>
       </div>

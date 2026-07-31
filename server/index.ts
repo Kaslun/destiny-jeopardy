@@ -14,17 +14,24 @@
 import { Server, routePartykitRequest, type Connection, type WSMessage } from "partyserver";
 import {
   applyBoardOp,
+  boardExhausted,
   clueKey,
   emptyRoom,
+  formatBytes,
   finalBounds,
   finalEligible,
   isSlug,
   isTimed,
+  isUploaded,
+  MAX_BOARD_BYTES,
   MAX_MEDIA_BYTES,
   parseGame,
+  readSecondsFor,
   ROOM_TTL_MS,
+  roundOf,
   secondsFor,
   standings,
+  STORAGE_BUDGET_BYTES,
   wagerBounds,
   type BoardClientMessage,
   type BoardServerMessage,
@@ -35,11 +42,13 @@ import {
   type Role,
   type RoomState,
   type ServerMessage,
+  type StorageUsage,
 } from "../shared/protocol";
 
 interface Env {
   JeopardyRoom: DurableObjectNamespace<JeopardyRoom>;
   BoardStore: DurableObjectNamespace<BoardStore>;
+  StorageMeter: DurableObjectNamespace<StorageMeter>;
   MEDIA: R2Bucket;
 }
 
@@ -60,6 +69,15 @@ export class JeopardyRoom extends Server<Env> {
   #meta = new Map<string, ConnMeta>();
   #loading: Promise<void> | null = null;
   #lastActivity = 0;
+  /** Player ids the host has removed. See {@link JeopardyRoom.kick}. */
+  #kicked = new Set<string>();
+  /**
+   * The secret that drives this room, set by whoever opened it first.
+   *
+   * Kept out of `RoomState` on purpose: state is broadcast to every screen in
+   * the room, and a key in there would be readable by every phone present.
+   */
+  #hostKey: string | null = null;
 
   /**
    * Discard a room nobody has touched for {@link ROOM_TTL_MS}.
@@ -77,7 +95,11 @@ export class JeopardyRoom extends Server<Env> {
     this.#state = emptyRoom();
     this.#meta.clear();
     this.#lastActivity = 0;
-    this.ctx.waitUntil(this.ctx.storage.delete(["state", "lastActivity"]));
+    // The claim expires with the room. An old code must hand you a clean room
+    // you can actually host, not one owned by a browser from last week.
+    this.#hostKey = null;
+    this.#kicked.clear();
+    this.ctx.waitUntil(this.ctx.storage.delete(["state", "lastActivity", "hostKey"]));
     return true;
   }
 
@@ -87,6 +109,7 @@ export class JeopardyRoom extends Server<Env> {
       this.#loading = (async () => {
         const saved = await this.ctx.storage.get<RoomState>("state");
         this.#lastActivity = (await this.ctx.storage.get<number>("lastActivity")) ?? 0;
+        this.#hostKey = (await this.ctx.storage.get<string>("hostKey")) ?? null;
 
         if (saved) {
           // Connection-derived fields never survive an eviction; rebuild them
@@ -107,7 +130,11 @@ export class JeopardyRoom extends Server<Env> {
     await this.#ready();
     this.#expireIfStale();
     this.#meta.set(conn.id, { role: "tv", playerId: null });
-    this.#send(conn, { type: "state", state: this.#state, you: null });
+    this.#send(conn, {
+      type: "state",
+      state: { ...this.#state, claimed: this.#hostKey !== null, youAreHost: false },
+      you: null,
+    });
   }
 
   async onClose(conn: Connection) {
@@ -169,6 +196,12 @@ export class JeopardyRoom extends Server<Env> {
       if (player) {
         player.name = msg.name.slice(0, 24);
         player.cls = msg.cls.slice(0, 24);
+        if (typeof msg.tint === "number" && Number.isFinite(msg.tint)) {
+          // Clamped, not validated against a list: the client knows how many
+          // tints its theme has and the server has no business shipping that
+          // table just to reject an out-of-range number.
+          player.tint = Math.max(0, Math.min(11, Math.round(msg.tint)));
+        }
         this.#commit();
       }
       return;
@@ -197,19 +230,22 @@ export class JeopardyRoom extends Server<Env> {
         if (!game) return;
         if (!s.started) return; // the board is closed while the room is in the lobby
         if (s.final || s.results) return; // and once the final round or standings begin
-        const clue = game.categories[msg.c]?.clues[msg.r];
+        const board = roundOf(game, s.round);
+        const clue = board?.categories[msg.c]?.clues[msg.r];
         if (!clue) return;
-        if (s.used.includes(clueKey(msg.c, msg.r))) return;
+        if (s.used.includes(clueKey(s.round, msg.c, msg.r))) return;
 
         s.open = { c: msg.c, r: msg.r };
         s.buzzes = [];
         s.spent = [];
         s.revealed = false;
+        s.resolved = false;
 
         // Whatever this clue is worth in time — its own setting, else the
         // board's, else the fallback. Every screen reads it from here.
         s.timerSeconds = secondsFor(game, clue);
         s.timed = isTimed(clue);
+        s.readSeconds = readSecondsFor(game, clue);
 
         if (clue.dd && s.players.length === 0) {
           // Without a player there is nobody to wager, so this would quietly
@@ -227,13 +263,19 @@ export class JeopardyRoom extends Server<Env> {
           // the first seat and let the host reassign.
           const owner = s.players.find((p) => p.id === s.control) ?? s.players[0];
           s.phase = "wager";
-          s.dd = { playerId: owner.id, wager: null, ...wagerBounds(owner.score, game.values) };
+          s.dd = { playerId: owner.id, wager: null, ...wagerBounds(owner.score, board.values) };
           // No clock during the wager — the timer starts when the clue shows.
           s.openedAt = null;
+          s.shownAt = null;
         } else {
           s.phase = "buzz";
           s.dd = null;
-          s.openedAt = Date.now();
+          // The buzzers open once the clue has had time to be read. Scheduled
+          // as a future instant rather than kicked off by a timer: this object
+          // has no alarm to miss, every screen counts down to the same number,
+          // and a buzz is judged against it on arrival.
+          s.shownAt = Date.now();
+          s.openedAt = s.shownAt + s.readSeconds * 1000;
         }
         break;
       }
@@ -242,11 +284,52 @@ export class JeopardyRoom extends Server<Env> {
         if (s.phase !== "wager" || !s.dd) return;
         const player = s.players.find((p) => p.id === msg.playerId);
         if (!player) return;
-        s.dd = { playerId: player.id, wager: null, ...wagerBounds(player.score, s.game?.values ?? []) };
+        s.dd = {
+          playerId: player.id,
+          wager: null,
+          ...wagerBounds(player.score, roundOf(s.game, s.round)?.values ?? []),
+        };
         break;
       }
       case "closeClue": {
         this.#closeClue();
+        // Only here, not inside `#closeClue` itself — that is also called by
+        // returning to the lobby, starting the final round and opening the
+        // standings, none of which should trigger a round change on the way
+        // past.
+        this.#advanceIfBoardExhausted();
+        break;
+      }
+      case "setRound": {
+        const s = this.#state;
+        if (!s.game) return;
+        if (msg.index < 0 || msg.index >= s.game.rounds.length) return;
+        if (s.final || s.results) return;
+        // Deliberately does not clear `used`: stepping back to an earlier round
+        // should show what was already played there, not offer it again. The
+        // keys are round-scoped precisely so this works.
+        this.#closeClue();
+        s.round = msg.index;
+        break;
+      }
+      case "setControl": {
+        const s = this.#state;
+        if (msg.playerId === null) {
+          s.control = null;
+          break;
+        }
+        if (!s.players.some((p) => p.id === msg.playerId)) return;
+        s.control = msg.playerId;
+        break;
+      }
+      case "openBuzzers": {
+        const s = this.#state;
+        // Only ever brings the moment forward. Sending it after the buzzers
+        // are already open would otherwise restart the clue's clock and hand
+        // the room a second helping of time.
+        if (!s.open || s.phase !== "buzz" || s.openedAt === null) return;
+        if (Date.now() >= s.openedAt) return;
+        s.openedAt = Date.now();
         break;
       }
       case "reveal": {
@@ -263,6 +346,10 @@ export class JeopardyRoom extends Server<Env> {
         const player = this.#state.players.find((p) => p.id === msg.playerId);
         if (!player) return;
         player.score += msg.delta;
+        break;
+      }
+      case "kick": {
+        this.#kick(msg.playerId);
         break;
       }
       case "setLockout": {
@@ -296,24 +383,11 @@ export class JeopardyRoom extends Server<Env> {
           this.#send(conn, { type: "error", message: "this game has no final clue" });
           return;
         }
-        const eligible = finalEligible(s.players);
-        if (eligible.length === 0) {
+        if (finalEligible(s.players).length === 0) {
           this.#send(conn, { type: "error", message: "nobody is above zero — no final round" });
           return;
         }
-        const entries: Record<string, FinalEntry> = {};
-        for (const p of eligible) {
-          entries[p.id] = { wager: null, response: "", locked: false, judged: null };
-        }
-        this.#closeClue();
-        s.final = {
-          phase: "wager",
-          writingClosed: false,
-          // Lowest score first, so the leader is revealed last.
-          order: eligible.slice().sort((a, b) => a.score - b.score).map((p) => p.id),
-          entries,
-          revealIndex: 0,
-        };
+        this.#startFinal();
         break;
       }
       case "finalAdvance": {
@@ -372,8 +446,35 @@ export class JeopardyRoom extends Server<Env> {
   // ---- handlers ----
 
   #handleJoin(conn: Connection, msg: Extract<ClientMessage, { type: "join" }>) {
-    const role: Role = msg.role === "host" || msg.role === "player" ? msg.role : "tv";
+    let role: Role = msg.role === "host" || msg.role === "player" ? msg.role : "tv";
     let playerId: string | null = null;
+
+    // Claiming the room. The first host to arrive with a key owns it; everyone
+    // after that must present the same one. Demoted rather than disconnected,
+    // so someone who opens the host URL out of curiosity gets a read-only
+    // console with an explanation, not a dead page.
+    if (role === "host") {
+      const key = typeof msg.hostKey === "string" ? msg.hostKey.slice(0, 64) : "";
+      if (!key) {
+        role = "tv";
+        this.#send(conn, { type: "error", message: "this room already has a host" });
+      } else if (this.#hostKey === null) {
+        this.#hostKey = key;
+        this.ctx.waitUntil(this.ctx.storage.put("hostKey", key));
+      } else if (this.#hostKey !== key) {
+        role = "tv";
+        this.#send(conn, {
+          type: "error",
+          message: "this room already has a host — you are watching, not driving",
+        });
+      }
+    }
+
+    if (role === "player" && msg.playerId && this.#kicked.has(msg.playerId)) {
+      this.#send(conn, { type: "error", message: "you have been removed from this room" });
+      this.#meta.set(conn.id, { role: "tv", playerId: null });
+      return;
+    }
 
     if (role === "player") {
       // A returning phone sends the id it stored locally, so a refresh keeps
@@ -402,7 +503,10 @@ export class JeopardyRoom extends Server<Env> {
         const id = msg.playerId?.slice(0, 40) || crypto.randomUUID();
         this.#state.players.push({
           id,
-          name: (msg.name || "GUARDIAN").slice(0, 24),
+          // The client sends nothing until the player has typed a name, and it
+          // cannot fill the blank itself — the wording belongs to the board's
+          // theme, which arrives over this same connection.
+          name: (msg.name || "PLAYER").slice(0, 24),
           cls: (msg.cls || "").slice(0, 24),
           score: 0,
           connected: true,
@@ -418,6 +522,55 @@ export class JeopardyRoom extends Server<Env> {
     this.#commit();
   }
 
+  /**
+   * Remove a player and keep them out.
+   *
+   * The id is remembered, because the phone stores it and would otherwise walk
+   * straight back in on the next reconnect — a "kick" that lasts one second is
+   * worse than none, since the host thinks it worked. Held in memory rather
+   * than in room state: hibernation is off, so the room stays resident for the
+   * evening, and a kick is not something that should outlive the game.
+   *
+   * Anything they were part of goes with them — a live buzz, a queue place, a
+   * Daily Double that was theirs to answer.
+   */
+  #kick(playerId: string) {
+    const s = this.#state;
+    if (!s.players.some((p) => p.id === playerId)) return;
+
+    this.#kicked.add(playerId);
+    s.players = s.players.filter((p) => p.id !== playerId);
+    s.buzzes = s.buzzes.filter((b) => b.playerId !== playerId);
+    s.spent = s.spent.filter((id) => id !== playerId);
+    if (s.control === playerId) s.control = null;
+    if (s.final) {
+      delete s.final.entries[playerId];
+      const at = s.final.order.indexOf(playerId);
+      if (at !== -1) {
+        s.final.order.splice(at, 1);
+        // Keep the reveal pointer on the same *person*, not the same slot.
+        if (at < s.final.revealIndex) s.final.revealIndex--;
+      }
+      s.final.revealIndex = Math.min(s.final.revealIndex, Math.max(0, s.final.order.length - 1));
+    }
+    if (s.results) {
+      s.results.order = s.results.order.filter((id) => id !== playerId);
+      s.results.revealed = Math.min(s.results.revealed, s.results.order.length);
+    }
+    // A Daily Double belonging to nobody cannot be answered, so it ends.
+    if (s.dd?.playerId === playerId) this.#closeClue();
+
+    for (const conn of this.getConnections()) {
+      if (this.#meta.get(conn.id)?.playerId !== playerId) continue;
+      this.#meta.delete(conn.id);
+      try {
+        conn.close(4001, "removed from the room");
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
   #handleWager(meta: ConnMeta, raw: number) {
     const s = this.#state;
     if (s.phase !== "wager" || !s.dd) return;
@@ -431,7 +584,14 @@ export class JeopardyRoom extends Server<Env> {
     // Clamped on the server. A phone could send anything at all.
     s.dd.wager = Math.max(s.dd.min, Math.min(s.dd.max, wager));
     s.phase = "live";
-    s.openedAt = Date.now();
+    // No read delay on a Daily Double: there is no buzzer race to protect, only
+    // one player may answer, and they have been staring at the category since
+    // the wager began. Zeroed rather than merely ignored — every screen derives
+    // its own countdown from this field, and a leftover value from the clue's
+    // own settings would have them all waiting for a gate that is already open.
+    s.readSeconds = 0;
+    s.shownAt = Date.now();
+    s.openedAt = s.shownAt;
     this.#commit();
   }
 
@@ -494,7 +654,12 @@ export class JeopardyRoom extends Server<Env> {
       final.phase = "clue";
       s.timerSeconds = secondsFor(s.game, s.game?.final ?? null);
       s.timed = isTimed(s.game?.final ?? null);
-      s.openedAt = Date.now();
+      s.readSeconds = readSecondsFor(s.game, s.game?.final ?? null);
+      // The writing clock starts once the clue has been read, exactly as the
+      // buzzers do — everybody should be answering the same question, not
+      // racing whoever reads fastest off the screen.
+      s.shownAt = Date.now();
+      s.openedAt = s.shownAt + s.readSeconds * 1000;
       return;
     }
 
@@ -502,6 +667,7 @@ export class JeopardyRoom extends Server<Env> {
       final.phase = "reveal";
       final.revealIndex = 0;
       s.openedAt = null;
+      s.shownAt = null;
       return;
     }
 
@@ -529,6 +695,12 @@ export class JeopardyRoom extends Server<Env> {
     const s = this.#state;
     if (!meta.playerId || !s.open || s.openedAt === null) return;
     if (s.phase !== "buzz") return; // a Daily Double is nobody else's to take
+    if (s.resolved) return; // already settled; the clue is only still up to be read
+    // Too early: the clue is still being read. Refused here rather than merely
+    // greyed out on the phone, because a disabled button is a suggestion and
+    // this is a rule — someone with the tab open from the last clue would
+    // otherwise land a buzz before anyone else had heard the question.
+    if (Date.now() < s.openedAt) return;
     // Time is up: the buzzer closes. Checked here rather than on a timer, so
     // there is no window where a late buzz slips in before an alarm fires.
     // An untimed clue never closes — the host decides when to move on.
@@ -544,6 +716,7 @@ export class JeopardyRoom extends Server<Env> {
   #handleJudge(correct: boolean) {
     const s = this.#state;
     if (!s.open) return;
+    if (s.resolved) return; // already settled — the clue is only still up to be read
 
     // A Daily Double is one player's bet. It resolves in a single ruling and
     // the clue is finished either way — there is no queue to fall through to.
@@ -552,11 +725,11 @@ export class JeopardyRoom extends Server<Env> {
       this.#addScore(s.dd.playerId, correct ? s.dd.wager : -s.dd.wager);
       if (correct) s.control = s.dd.playerId;
       this.#noteRuling(correct);
-      this.#closeClue();
+      this.#resolveClue();
       return;
     }
 
-    const value = s.game?.values[s.open.r] ?? 0;
+    const value = roundOf(s.game, s.round)?.values[s.open.r] ?? 0;
     const top = s.buzzes[0];
 
     if (correct) {
@@ -565,7 +738,7 @@ export class JeopardyRoom extends Server<Env> {
         s.control = top.playerId; // they pick the next clue
         this.#noteRuling(true);
       }
-      this.#closeClue();
+      this.#resolveClue();
       return;
     }
 
@@ -575,6 +748,33 @@ export class JeopardyRoom extends Server<Env> {
       s.buzzes.shift(); // the next player in the queue is now on the hook
       this.#noteRuling(false);
     }
+
+    // Nobody is left to take it. The clue is over whether or not it was ever
+    // answered, so show the room what it was rather than closing on a shrug.
+    if (s.buzzes.length === 0 && this.#everyoneSpent()) this.#resolveClue();
+  }
+
+  /** Has every connected player already had their go at the open clue? */
+  #everyoneSpent(): boolean {
+    const live = this.#state.players.filter((p) => p.connected);
+    return live.length > 0 && live.every((p) => this.#state.spent.includes(p.id));
+  }
+
+  /**
+   * Settle the open clue without taking it off the screen.
+   *
+   * A correct answer used to close the clue instantly, which snapped the room
+   * back to the board before anyone had heard what the answer actually was —
+   * the one moment everybody is waiting for. So a ruling now reveals it and
+   * stops there; moving on is a separate, deliberate act by the host.
+   */
+  #resolveClue() {
+    const s = this.#state;
+    s.resolved = true;
+    s.revealed = true;
+    // The clock stops mattering the moment the clue is settled, and a bar still
+    // draining behind a revealed answer reads as though time were still on.
+    s.timed = false;
   }
 
   /** Record a verdict so every screen can react without inferring it. */
@@ -596,16 +796,65 @@ export class JeopardyRoom extends Server<Env> {
   #closeClue() {
     const s = this.#state;
     if (s.open) {
-      const key = clueKey(s.open.c, s.open.r);
+      const key = clueKey(s.round, s.open.c, s.open.r);
       if (!s.used.includes(key)) s.used.push(key);
     }
     s.open = null;
     s.openedAt = null;
+    s.shownAt = null;
     s.phase = "buzz";
     s.dd = null;
     s.buzzes = [];
     s.spent = [];
     s.revealed = false;
+    s.resolved = false;
+    s.timed = true;
+  }
+
+  /** Open the final round. Shared by the host's button and board exhaustion. */
+  #startFinal() {
+    const s = this.#state;
+    const eligible = finalEligible(s.players);
+    if (eligible.length === 0) return;
+    const entries: Record<string, FinalEntry> = {};
+    for (const p of eligible) {
+      entries[p.id] = { wager: null, response: "", locked: false, judged: null };
+    }
+    this.#closeClue();
+    s.final = {
+      phase: "wager",
+      writingClosed: false,
+      // Lowest score first, so the leader is revealed last.
+      order: eligible.slice().sort((a, b) => a.score - b.score).map((p) => p.id),
+      entries,
+      revealIndex: 0,
+    };
+  }
+
+  /**
+   * The last clue of a round has been played — move the game on.
+   *
+   * An empty board is not a state anyone wants to sit in: there is nothing left
+   * to pick, and the host would otherwise have to notice and press the right
+   * button. So the room walks itself forward — round one to round two, and off
+   * the last round into the final. The host can still step back with the round
+   * controls, or abandon the final round.
+   *
+   * Scores and board control survive a round change. Only the grid is new.
+   */
+  #advanceIfBoardExhausted() {
+    const s = this.#state;
+    if (!s.started || s.final || s.results) return;
+    if (!boardExhausted(s.game, s.round, s.used)) return;
+
+    if (s.round + 1 < (s.game?.rounds.length ?? 0)) {
+      s.round++;
+      return;
+    }
+
+    if (!s.game?.final) return; // no final clue authored — leave them on the board
+    if (finalEligible(s.players).length === 0) return; // nobody in the black
+    this.#startFinal();
   }
 
   #resetBoard() {
@@ -615,12 +864,16 @@ export class JeopardyRoom extends Server<Env> {
     s.used = [];
     s.open = null;
     s.openedAt = null;
+    s.shownAt = null;
     s.phase = "buzz";
     s.dd = null;
     s.control = null;
+    s.round = 0;
     s.buzzes = [];
     s.spent = [];
     s.revealed = false;
+    s.resolved = false;
+    s.timed = true;
     for (const p of s.players) p.score = 0;
   }
 
@@ -656,6 +909,9 @@ export class JeopardyRoom extends Server<Env> {
     await this.ctx.storage.deleteAlarm();
     this.#state = emptyRoom();
     this.#meta.clear();
+    // A wiped room forgives everyone: the code is meant to behave like a brand
+    // new one, and that includes letting anybody back in.
+    this.#kicked.clear();
     this.#loading = null; // a later access re-reads and finds nothing
     for (const conn of this.getConnections()) {
       try {
@@ -689,14 +945,21 @@ export class JeopardyRoom extends Server<Env> {
     }
   }
 
-  /** Persist, then push a fresh snapshot to everyone with their own id attached. */
+  /**
+   * Persist, then push a fresh snapshot to everyone.
+   *
+   * Two fields are per-recipient rather than part of the shared truth: your own
+   * player id, and whether *you* are the host. Both are answers to "who am I",
+   * which is necessarily a different answer down every socket.
+   */
   #commit() {
     this.ctx.waitUntil(this.#persist());
+    const claimed = this.#hostKey !== null;
     for (const conn of this.getConnections()) {
       const meta = this.#meta.get(conn.id);
       this.#send(conn, {
         type: "state",
-        state: this.#state,
+        state: { ...this.#state, claimed, youAreHost: meta?.role === "host" },
         you: meta?.playerId ?? null,
       });
     }
@@ -724,6 +987,21 @@ export class BoardStore extends Server<Env> {
   #presence = new Map<string, EditorPresence>();
   #loaded = false;
   #lastSweep = 0;
+  /**
+   * The secret that permits writing to this board.
+   *
+   * Reading stays open — a code is how you share a board with whoever is
+   * hosting, and gating that would break the one workflow this thing has. It is
+   * *overwriting* that needs protecting, because a guessed code should not be
+   * able to flatten someone's evening of work.
+   *
+   * Null on boards created before this existed. The first writer to present a
+   * key claims them, which upgrades every old board the next time its author
+   * opens it, and needs no migration.
+   */
+  #editKey: string | null = null;
+  /** Per-connection write access, decided at `hello`. */
+  #writers = new Map<string, boolean>();
 
   async onStart() {
     await this.#load();
@@ -741,14 +1019,22 @@ export class BoardStore extends Server<Env> {
    */
   async #load() {
     const stored = await this.ctx.storage.get<Game>("game");
+    this.#editKey = (await this.ctx.storage.get<string>("editKey")) ?? null;
     this.#loaded = true;
     if (!stored) {
       this.#game = null;
       return;
     }
-    const needsIds = stored.categories.some((c) => !c.id || c.clues.some((q) => !q.id));
-    this.#game = needsIds ? (parseGame(stored) ?? stored) : stored;
-    if (needsIds && this.#game) await this.#persist();
+    // Boards saved before rounds existed have no `rounds` array, and boards
+    // saved before collaborative editing have no ids on their categories and
+    // clues. Both are normalised on the way in and written back once, so the
+    // upgrade happens exactly as often as a board is opened rather than every
+    // time it wakes.
+    const stale =
+      !Array.isArray((stored as { rounds?: unknown }).rounds) ||
+      stored.rounds.some((r) => !r.id || r.categories.some((c) => !c.id || c.clues.some((q) => !q.id)));
+    this.#game = stale ? (parseGame(stored) ?? stored) : stored;
+    if (stale && this.#game) await this.#persist();
 
     // Not awaited: nobody should wait on housekeeping to open a board.
     void this.#sweepOrphans();
@@ -783,6 +1069,7 @@ export class BoardStore extends Server<Env> {
 
   async onClose(conn: Connection) {
     this.#presence.delete(conn.id);
+    this.#writers.delete(conn.id);
     this.#broadcastEditors();
   }
 
@@ -802,6 +1089,9 @@ export class BoardStore extends Server<Env> {
 
     if (msg.type === "hello") {
       me.name = String(msg.name).slice(0, 24) || "EDITOR";
+      const canEdit = await this.#mayWrite(typeof msg.key === "string" ? msg.key.slice(0, 64) : null);
+      this.#writers.set(conn.id, canEdit);
+      conn.send(JSON.stringify({ type: "access", canEdit } satisfies BoardServerMessage));
       this.#broadcastEditors();
       return;
     }
@@ -813,6 +1103,18 @@ export class BoardStore extends Server<Env> {
     }
 
     if (msg.type === "op") {
+      // Checked on every operation rather than only at the door: a client that
+      // never said hello, or one that reconnected, must not inherit somebody
+      // else's write access.
+      if (!this.#writers.get(conn.id)) {
+        conn.send(
+          JSON.stringify({
+            type: "error",
+            message: "this board is read-only for you — you need its edit link",
+          } satisfies BoardServerMessage),
+        );
+        return;
+      }
       const next = applyBoardOp(this.#game, msg.op);
       if (next === this.#game) return; // op was a no-op; don't churn everyone
       const before = mediaKeysIn(this.#game);
@@ -834,6 +1136,24 @@ export class BoardStore extends Server<Env> {
   async onRequest(request: Request): Promise<Response> {
     await this.#ready();
 
+    // Uploads are routed through this object rather than handled at the edge,
+    // so that "may this caller write to this board?" is answered in exactly one
+    // place. Storing a file against a board is a write like any other.
+    // "May this key write to this board?", asked without the file attached.
+    //
+    // The upload itself is *not* routed through this object. Handing a Durable
+    // Object a request whose body is a 40 MB stream and answering it without
+    // reading that stream — which is exactly what a refusal does — leaves the
+    // client pushing bytes at a response that has already been sent. The
+    // runtime treats that as an uncaught error and the object starts 503ing, so
+    // a single unauthorised upload would take the board down for everyone.
+    // Asking first keeps the body out of it entirely.
+    if (new URL(request.url).pathname === "/authorize" && request.method === "POST") {
+      const key = request.headers.get("x-edit-key");
+      const ok = await this.#mayWrite(key ? key.slice(0, 64) : null);
+      return json(ok ? { ok: true } : { error: "this board belongs to someone else" }, ok ? 200 : 403);
+    }
+
     if (request.method === "GET") {
       if (!this.#game) return json({ error: "no board with that code" }, 404);
       return json({ game: this.#game });
@@ -845,6 +1165,10 @@ export class BoardStore extends Server<Env> {
         body = await request.json();
       } catch {
         return json({ error: "body was not JSON" }, 400);
+      }
+      const key = (body as { key?: unknown })?.key;
+      if (!(await this.#mayWrite(typeof key === "string" ? key.slice(0, 64) : null))) {
+        return json({ error: "this board belongs to someone else" }, 403);
       }
       const game = parseGame((body as { game?: unknown })?.game ?? body);
       if (!game) return json({ error: "that game has no categories" }, 400);
@@ -877,6 +1201,24 @@ export class BoardStore extends Server<Env> {
   }
 
   /**
+   * Whether this key may write to the board, claiming it if it is unowned.
+   *
+   * Trust-on-first-use: an unclaimed board belongs to the next person who
+   * writes to it holding a key. That is weaker than issuing the key at creation
+   * time, and it is the deliberate price of not breaking every board that
+   * already exists.
+   */
+  async #mayWrite(key: string | null): Promise<boolean> {
+    if (!key) return false;
+    if (this.#editKey === null) {
+      this.#editKey = key;
+      await this.ctx.storage.put("editKey", key);
+      return true;
+    }
+    return this.#editKey === key;
+  }
+
+  /**
    * Delete whatever the document stopped pointing at.
    *
    * Diffing references before and after a change catches every route a file can
@@ -894,6 +1236,9 @@ export class BoardStore extends Server<Env> {
       // A failed delete costs storage, not correctness — never fail the edit.
       console.error("[media] could not delete orphans", err);
     }
+    // Freeing space must reach the shared counter, or the budget only ever
+    // grows and deleting media stops helping.
+    await this.#recount();
   }
 
   /**
@@ -919,8 +1264,41 @@ export class BoardStore extends Server<Env> {
         await this.env.MEDIA.delete(stale);
         console.info(`[media] swept ${stale.length} orphaned file(s) from ${this.#prefix()}`);
       }
+      // Already holding a full listing, so the true size is free to compute.
+      const kept = listed.objects.filter((o) => !stale.includes(o.key));
+      await this.#reportUsage(kept.reduce((sum, o) => sum + o.size, 0));
     } catch (err) {
       console.error("[media] sweep failed", err);
+    }
+  }
+
+  /**
+   * Tell the meter what this board actually occupies.
+   *
+   * The figure comes from a bucket listing rather than from arithmetic on what
+   * we think we uploaded, so the shared counter is corrected every time a board
+   * changes. Failures are swallowed: a board must stay editable whether or not
+   * the accounting is reachable.
+   */
+  async #reportUsage(bytes: number) {
+    try {
+      await meterStub(this.env).fetch("https://meter/", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ slug: this.name, bytes }),
+      });
+    } catch (err) {
+      console.error("[quota] could not report usage", err);
+    }
+  }
+
+  /** Recount from R2 and report. Used after a change that deleted files. */
+  async #recount() {
+    try {
+      const listed = await this.env.MEDIA.list({ prefix: this.#prefix() });
+      await this.#reportUsage(listed.objects.reduce((sum, o) => sum + o.size, 0));
+    } catch (err) {
+      console.error("[quota] could not recount", err);
     }
   }
 
@@ -940,18 +1318,115 @@ export class BoardStore extends Server<Env> {
   }
 }
 
+/**
+ * The storage budget, in one place.
+ *
+ * There is exactly one of these objects for the whole deployment, because a
+ * budget shared between boards can only be enforced by something that can see
+ * all of them. It holds a per-board byte count and their sum.
+ *
+ * The counter is a cache, not the truth — R2 is. Each board recomputes its own
+ * size from a bucket listing whenever it changes and reports the real figure,
+ * so a missed increment, a failed delete or an upload that died halfway is
+ * corrected on the next edit rather than accumulating forever. A counter that
+ * can only ever drift upward eventually refuses uploads on a bucket that is
+ * mostly empty, and nobody would be able to tell why.
+ */
+export class StorageMeter extends Server<Env> {
+  static options = { hibernate: false };
+
+  #bytes: Record<string, number> | null = null;
+
+  async #ready(): Promise<Record<string, number>> {
+    if (!this.#bytes) {
+      this.#bytes = (await this.ctx.storage.get<Record<string, number>>("bytes")) ?? {};
+    }
+    return this.#bytes;
+  }
+
+  #total(bytes: Record<string, number>): number {
+    let sum = 0;
+    for (const n of Object.values(bytes)) sum += n;
+    return sum;
+  }
+
+  async onRequest(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    const bytes = await this.#ready();
+    const slug = (url.searchParams.get("slug") ?? "").toUpperCase();
+
+    if (request.method === "POST") {
+      let body: { slug?: string; bytes?: number; delta?: number };
+      try {
+        body = (await request.json()) as typeof body;
+      } catch {
+        return json({ error: "body was not JSON" }, 400);
+      }
+      const target = String(body.slug ?? "").toUpperCase();
+      if (!isSlug(target)) return json({ error: "bad board code" }, 400);
+
+      if (typeof body.bytes === "number") {
+        // An authoritative recount from the board itself.
+        if (body.bytes <= 0) delete bytes[target];
+        else bytes[target] = Math.round(body.bytes);
+      } else if (typeof body.delta === "number") {
+        // A cheap increment straight after an upload, so the next request sees
+        // the new file without waiting for a recount.
+        bytes[target] = Math.max(0, (bytes[target] ?? 0) + Math.round(body.delta));
+      }
+      await this.ctx.storage.put("bytes", bytes);
+      return json({ board: bytes[target] ?? 0, total: this.#total(bytes) });
+    }
+
+    return json({
+      board: bytes[slug] ?? 0,
+      total: this.#total(bytes),
+      budget: STORAGE_BUDGET_BYTES,
+      boardLimit: MAX_BOARD_BYTES,
+    } satisfies StorageUsage);
+  }
+}
+
+/** The single meter instance. */
+function meterStub(env: Env) {
+  return env.StorageMeter.get(env.StorageMeter.idFromName("global"));
+}
+
+async function readUsage(env: Env, origin: string, slug: string): Promise<StorageUsage> {
+  try {
+    const res = await meterStub(env).fetch(`${origin}/?slug=${encodeURIComponent(slug)}`);
+    return (await res.json()) as StorageUsage;
+  } catch (err) {
+    // A meter that is unreachable must not take uploads down with it. Reporting
+    // zero use lets the per-file and per-request limits carry the load alone,
+    // which is the pre-quota behaviour rather than a new failure mode.
+    console.error("[quota] could not read usage", err);
+    return { board: 0, total: 0, budget: STORAGE_BUDGET_BYTES, boardLimit: MAX_BOARD_BYTES };
+  }
+}
+
 const EDITOR_COLORS = ["#7fd8f0", "#f0c469", "#8fd98a", "#b18cf0", "#f0803c", "#ff8fb0"];
 
-/** Every media file the document currently points at, the final clue included. */
+/**
+ * Every *stored file* the document points at, the final clue included.
+ *
+ * Only uploaded media counts. A YouTube clue keeps its video id in the same
+ * `mediaKey` field, and that id is not an object in our bucket — letting it
+ * into this set would put a foreign string into the reference list that the
+ * orphan sweep diffs against, which is a good way to grow a bug that deletes
+ * the wrong thing later.
+ */
 function mediaKeysIn(game: Game | null): Set<string> {
   const keys = new Set<string>();
   if (!game) return keys;
-  for (const cat of game.categories) {
-    for (const clue of cat.clues) {
-      if (clue.mediaKey) keys.add(clue.mediaKey);
+  for (const round of game.rounds) {
+    for (const cat of round.categories) {
+      for (const clue of cat.clues) {
+        if (clue.mediaKey && isUploaded(clue.media)) keys.add(clue.mediaKey);
+      }
     }
   }
-  if (game.final?.mediaKey) keys.add(game.final.mediaKey);
+  if (game.final?.mediaKey && isUploaded(game.final.media)) keys.add(game.final.mediaKey);
   return keys;
 }
 
@@ -965,13 +1440,16 @@ const SWEEP_THROTTLE_MS = 5 * 60 * 1000;
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,HEAD,POST,PUT,OPTIONS",
-  "access-control-allow-headers": "content-type",
+  // `x-edit-key` is not a CORS-safelisted header, so an upload carrying it
+  // triggers a preflight. Leaving it out of this list fails that preflight and
+  // the browser reports a bare "failed to fetch" with no status to debug.
+  "access-control-allow-headers": "content-type,x-edit-key",
 };
 
-function json(body: unknown, status = 200): Response {
+function json(body: unknown, status = 200, extra: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", ...CORS },
+    headers: { "content-type": "application/json", ...CORS, ...extra },
   });
 }
 
@@ -984,6 +1462,13 @@ const EXT: Record<string, string> = {
   "video/mp4": "mp4",
   "video/webm": "webm",
   "video/quicktime": "mov",
+  "audio/mpeg": "mp3",
+  "audio/mp4": "m4a",
+  "audio/aac": "aac",
+  "audio/ogg": "ogg",
+  "audio/wav": "wav",
+  "audio/webm": "weba",
+  "audio/flac": "flac",
 };
 
 /**
@@ -1001,8 +1486,9 @@ async function uploadMedia(request: Request, env: Env, slug: string, clueId: str
   const type = (request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
   const isImage = type.startsWith("image/");
   const isVideo = type.startsWith("video/");
-  if (!isImage && !isVideo) {
-    return json({ error: "only images and video can be uploaded" }, 415);
+  const isAudio = type.startsWith("audio/");
+  if (!isImage && !isVideo && !isAudio) {
+    return json({ error: "only images, video and audio can be uploaded" }, 415);
   }
 
   const tooBig = `that file is too big — the limit is ${Math.round(MAX_MEDIA_BYTES / 1024 / 1024)} MB`;
@@ -1013,7 +1499,7 @@ async function uploadMedia(request: Request, env: Env, slug: string, clueId: str
 
   // A fresh random segment per upload, so replacing a clue's media can never be
   // served from a stale cache under the old URL.
-  const ext = EXT[type] ?? (isVideo ? "bin" : "img");
+  const ext = EXT[type] ?? (isVideo ? "bin" : isAudio ? "snd" : "img");
   const key = `boards/${slug}/${clueId}/${crypto.randomUUID().slice(0, 12)}.${ext}`;
 
   // R2 will only take a stream whose length it knows. A request body that
@@ -1056,7 +1542,14 @@ async function uploadMedia(request: Request, env: Env, slug: string, clueId: str
     return json({ error: "upload failed" }, 500);
   }
 
-  return json({ key, media: isVideo ? "video" : "image", contentType: type });
+  // The stored size is echoed in a header rather than the body so the caller
+  // can bill it to the quota without having to re-read the object.
+  const stored = declared > 0 ? declared : ((await env.MEDIA.head(key))?.size ?? 0);
+  return json(
+    { key, media: isVideo ? "video" : isAudio ? "audio" : "image", contentType: type },
+    200,
+    { "x-stored-bytes": String(stored) },
+  );
 }
 
 /** Serve a stored file, honouring Range so video scrubbing works. */
@@ -1109,7 +1602,7 @@ async function serveMedia(request: Request, env: Env, key: string): Promise<Resp
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
@@ -1118,7 +1611,69 @@ export default {
 
     const upload = url.pathname.match(/^\/upload\/([^/]+)\/([^/]+)$/);
     if (upload && request.method === "POST") {
-      return uploadMedia(request, env, decodeURIComponent(upload[1]).toUpperCase(), decodeURIComponent(upload[2]));
+      const slug = decodeURIComponent(upload[1]).toUpperCase();
+      if (!isSlug(slug)) return json({ error: "bad board code" }, 400);
+
+      // Ask the board whether this key may write, then stream the file
+      // straight into R2 from here. The permission question travels to the
+      // object; the file does not.
+      const stub = env.BoardStore.get(env.BoardStore.idFromName(slug));
+      const allowed = await stub.fetch(
+        new Request(`${url.origin}/authorize`, {
+          method: "POST",
+          headers: { "x-edit-key": request.headers.get("x-edit-key") ?? "" },
+        }),
+      );
+      if (!allowed.ok) return allowed;
+
+      // Checked before a byte is stored, against the declared length. A chunked
+      // upload declares nothing, and is caught by the running ceiling inside
+      // `uploadMedia` instead.
+      const usage = await readUsage(env, url.origin, slug);
+      const declared = Number(request.headers.get("content-length") || "0");
+      if (usage.total + declared > usage.budget) {
+        return json(
+          {
+            error: `storage is full — ${formatBytes(usage.total)} of ${formatBytes(usage.budget)} used. delete some media, or use a YouTube link instead`,
+          },
+          507,
+        );
+      }
+      if (usage.board + declared > usage.boardLimit) {
+        return json(
+          {
+            error: `this board is using ${formatBytes(usage.board)} of its ${formatBytes(usage.boardLimit)} — delete something, or use a YouTube link`,
+          },
+          507,
+        );
+      }
+
+      const stored = await uploadMedia(request, env, slug, decodeURIComponent(upload[2]));
+
+      // Count it straight away so a burst of uploads cannot all pass the same
+      // stale total. The board's own recount corrects this shortly after.
+      if (stored.ok) {
+        const size = Number(stored.headers.get("x-stored-bytes") || "0");
+        if (size > 0) {
+          ctx.waitUntil(
+            meterStub(env)
+              .fetch(`${url.origin}/`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ slug, delta: size }),
+              })
+              .then(() => undefined)
+              .catch(() => undefined),
+          );
+        }
+      }
+      return stored;
+    }
+
+    if (url.pathname === "/usage" && request.method === "GET") {
+      const slug = (url.searchParams.get("slug") ?? "").toUpperCase();
+      if (!isSlug(slug)) return json({ error: "bad board code" }, 400);
+      return json(await readUsage(env, url.origin, slug));
     }
 
     if (url.pathname.startsWith("/media/") && (request.method === "GET" || request.method === "HEAD")) {

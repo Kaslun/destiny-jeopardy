@@ -1,4 +1,4 @@
-# Guardian Jeopardy
+# Jeopardy
 
 A buzzer trivia game for a room full of people and their phones.
 
@@ -36,7 +36,7 @@ snapshots remove a category of desync bugs that incremental patches invite.
 
 ```
 app/            Next.js App Router — the four surfaces
-lib/            useRoom hook (partysocket) + design tokens
+lib/            useRoom hook (partysocket) + themes and design tokens
 server/         the Worker: JeopardyRoom Durable Object
 shared/         wire protocol, shared by both ends
 design/         the original design doc + board editor
@@ -78,9 +78,50 @@ limit: merging characters inside one clue needs a CRDT, which is a lot of machin
 for a six-by-five grid. Presence is the mitigation — you can see someone is in
 there before you start.
 
-The original design doc lives at `design/Guardian Jeopardy.dc.html` and is
-published to `/design/` by `npm run build`. It is the visual reference; the
-React editor at `/edit` is the one wired to the game.
+The original design doc lives in `design/` and is published to `/design/` by
+`npm run build`. It is the visual reference; the React editor at `/edit` is the
+one wired to the game.
+
+## Themes
+
+A theme is a palette, a pair of typefaces, and the words the game uses about
+itself. They live in `lib/themes.ts`; three ship today:
+
+| Theme | Looks like |
+| --- | --- |
+| **Classic** | Royal blue and gold, the way the show does it. The default. |
+| **Guardian** | The original design: deep navy, gold, sci-fi fireteam flavour. |
+| **Midnight** | Slate and teal. Understated, no flavour of its own. |
+
+The theme belongs to the **board**, picked in the editor, so the TV, host console
+and every phone in the room agree without anyone configuring anything.
+
+Colours and typefaces are **CSS custom properties**. `lib/theme.ts` exports `C`,
+whose members are strings like `"var(--c-accent)"` rather than colours, so every
+inline style in the app reads normally but resolves at paint time against
+whichever theme is mounted. Switching a theme rewrites one `<style>` block —
+nothing re-renders, and no component has to know themes exist.
+
+Tokens are named for their **role**, never their colour: `accent`, `warn`,
+`special`, `good`. A token called `gold` would be a lie in every theme but one,
+and the lie spreads — the next person reads `C.gold` and reaches for gold.
+
+`useTheme(id)` mounts a theme and hands back its `copy` and `classes`. It applies
+the palette as a side effect on `document.head` rather than as rendered markup,
+because the TV returns from half a dozen branches depending on what the room is
+doing and a rendered `<ThemeStyle>` is easy to forget in the branch nobody tested.
+
+Boards saved **before themes existed** have no `theme` field and render as
+Guardian, so nothing anyone already built changes appearance. Only new boards
+take the neutral default.
+
+### Adding one
+
+Add a `Theme` to `lib/themes.ts` and list it in `THEMES`. Every token is
+required — there is no partial theme and no inheritance, because a theme that
+falls back to another theme's colours for the tokens it forgot looks broken in
+exactly the places nobody checked. If the theme brings a new typeface, add it to
+the font link in `app/layout.tsx`.
 
 ## Local development
 
@@ -149,11 +190,66 @@ npx vercel --prod
   `/boards/:code` for the host console, which only ever wants a whole board. A
   PUT also broadcasts, so an outside overwrite reaches anyone with it open.
 
+## Access
+
+There are no accounts. Nobody signs in to play a party game, and a login screen
+between someone and a board they made would be worse than the problem it solves.
+Instead each room and each board has a **secret you either hold or you don't**.
+
+- **Rooms are claimed.** The first host to open one owns it; anyone else opening
+  `/host/CODE` gets a read-only console that says so. The claim expires with the
+  room, so an old code still hands you a room you can actually host.
+- **Boards are readable by anyone with the code** — that is the sharing
+  mechanism — but **writable only with the edit key**. Overwriting is what needs
+  protecting: a guessed code should not be able to flatten a night's work.
+  Uploading media counts as writing.
+- Boards that predate this are **claimed by the next person who writes to them**
+  holding a key. Weaker than issuing keys at creation, and the deliberate price
+  of not breaking every board that already exists.
+
+The key rides in the **URL fragment**, so it is a link you can send to a co-host
+or open on another device, and it never reaches a server log the way a query
+string would. It is mirrored into `localStorage`, so the ordinary case — same
+person, same browser, later that evening — needs no link at all. The host console
+and the editor both offer a copy button, and the editor's read-only *share* link
+is labelled separately from its *edit* link.
+
+This stops accidents and passers-by, which is the actual threat. It is not a
+defence against someone determined who already has your link, and does not try
+to be.
+
 ## Clue media
 
-Clues can carry a real image or video. Upload one in the editor and it appears
-on the TV when that clue opens, with a thumbnail on the host console so the host
-knows what the room is looking at.
+Clues can carry an image, a video, an audio file or a **YouTube link**. Upload
+one in the editor and it appears on the TV when that clue opens, with a thumbnail
+on the host console so the host knows what the room is looking at.
+
+**Media is sized to its own shape.** The frame takes the picture's natural aspect
+ratio once it is known, bounded by the height it was given rather than fixed to
+it — a portrait photo or a vertical clip no longer sits in a slab of dead space
+with the subject squeezed into a strip.
+
+**A YouTube clue costs no storage**, since it stores a video id rather than a
+file. It is the answer to a board built out of clips, and to the quota below.
+Audio clues get a plate with the caption and controls, because a black rectangle
+is not something a room can look at.
+
+### The storage budget
+
+R2's free tier is 10 GB and nothing used to count, so uploads simply accumulated.
+A single `StorageMeter` object now holds the budget, because a ceiling shared
+between boards can only be enforced by something that can see all of them.
+
+- **9 GB overall**, set below the tier: a ceiling you can cross by a few hundred
+  megabytes is not a ceiling.
+- **1 GB per board**, so one board cannot eat the lot.
+- The editor shows what the board is using, and turns amber near the limit.
+
+The counter is a **cache, not the truth** — R2 is. Each board recomputes its own
+size from a bucket listing whenever it changes and reports the real figure, so a
+missed increment or a half-dead upload is corrected on the next edit. A counter
+that can only drift upward eventually refuses uploads on a bucket that is mostly
+empty, and nobody would be able to tell why.
 
 Files live in **R2**, streamed through the Worker — `POST /upload/:code/:clueId`
 to store, `GET /media/:key` to serve. R2 rather than a blob host because egress
@@ -229,28 +325,67 @@ screen says so — so nobody is staring at a dead buzzer during the reveal.
 It works with or without a final round, ties share a rank, and the board is
 closed server-side while the standings are up.
 
-## Clue timers
+## Rounds
 
-Each clue is one of three things, set in the editor:
+A game is a **list of boards**, played in order, each with its own categories and
+its own value ladder. Doubling the money for round two is the point of round two,
+so the ladder belongs to the round rather than the game.
+
+Adding a round in the editor gives you the previous round's width with its values
+doubled, which is what a second round almost always is. Rounds advance by
+themselves when a board is exhausted — round one to round two, and off the last
+round into the final — and the host can step between them manually.
+
+Played clues are keyed by **round as well as position**, so playing the 200 in
+round one does not cross off the 200 in round two, and stepping back to an
+earlier round still shows what was already taken.
+
+Boards saved before rounds existed have `categories` and `values` at the top
+level. `parseGame` folds those into a single round on the way in, so **every
+board ever saved still loads** and nothing needed migrating in place.
+
+## Clue timers and the read delay
+
+A clue now runs in two stretches: it is **read**, and then it is **answered**.
 
 | Setting | Behaviour |
 | --- | --- |
+| Read delay, seconds | The clue is on screen but the buzzers are shut |
 | Timed, no seconds given | Uses the board default |
 | Timed, seconds given | Uses that, clamped to 5–300 |
 | **Timer off** | No clock at all; buzzers stay open until the host closes it |
 
-Duration resolves clue → board → 20 seconds. Untimed clues are marked `∞` on the
-editor grid and on the TV, so you can see at a glance which ones run long — handy
-for a clue built around a video.
+Both resolve clue → board → fallback; the timer falls back to 20 seconds and the
+read delay to none, so a board that says nothing behaves exactly as it always
+has. A video clue wants a read delay about as long as the clip.
 
-**When time runs out the buzzer closes.** The server refuses late buzzes using
-its own clock, checked on arrival rather than on a timer, so there is no window
-where a late buzz slips through. The clue stays open — the host still decides
-when to reveal and move on. An untimed clue never closes its buzzer.
+**The buzzers are shut server-side for the whole read delay** — refused on
+arrival, not merely greyed out on the phone, because a disabled button is a
+suggestion and this is a rule. Every screen counts down to the moment they open,
+the TV plays a cue when they do, and the phone's buzzer becomes a countdown
+rather than a padlock. The host can open them early with **Open buzzers now**,
+which only ever moves the moment forward — sending it twice cannot gift the room
+extra time.
+
+`RoomState.openedAt` is **when the buzzers open**, which may be in the future.
+One number drives the countdown to the opening, the clue's own clock, and the
+server's judgement of an early or late buzz, so those three can never disagree.
 
 Screens count down locally from when the clue appeared rather than from the
 server's epoch, so a viewer whose system clock is wrong still sees a full,
 correct bar. That display clock never decides the rules.
+
+## Settling a clue
+
+A correct ruling used to close the clue instantly, which snapped the room back to
+the board before anyone had heard what the answer was — the one moment everybody
+is waiting for. Now a ruling that settles a clue **reveals the answer and holds**;
+moving on is a separate, deliberate press. The same happens when a wrong answer
+leaves nobody able to take it.
+
+Board control — whoever answered last, and therefore picks next — is shown on the
+TV, on the host console and on that player's phone. The host can reassign it when
+a clue nobody got leaves it stale.
 
 ## Feel
 
@@ -286,6 +421,8 @@ Twelve cues, defined in `lib/sound.ts`:
 | Cue | Fires when | Plays on |
 | --- | --- | --- |
 | `clueOpen` | a clue goes live | TV |
+| `buzzersOpen` | the read delay ends and the room may ring in | TV |
+| `boardBed` | ambience under the board between clues | TV |
 | `buzz` | the first buzz lands / your own buzz registers | TV, phone |
 | `correct` | the host rules correct / you turn out to be first in | TV, phone |
 | `wrong` | the host rules wrong | TV |
@@ -349,26 +486,40 @@ anyway.
 
 ### Gameplay
 
-- **No second round.** There is no Double Jeopardy: no round concept and no
-  value doubling. Today you would build round two as a separate board.
 - **The host drives the board.** Players cannot pick their own clue from their
-  phone, which is how board control works on the show.
-- **The timer starts when the clue opens**, not when the host finishes reading
-  it. Longer clues want a longer setting.
+  phone, which is how board control works on the show. Whose turn it is *is*
+  shown everywhere, so the host is told what to click.
+- **The read delay is a clock, not a detector.** It cannot tell that a video has
+  actually finished — set it to roughly the clip's length, and use *Open buzzers
+  now* if it runs short.
 
 ### Media
 
 - **Video autoplay may be blocked** until someone interacts with the TV page.
-  `controls` is the fallback. A host-driven "play on TV" control would fix it
-  properly.
+  `controls` is the fallback, and the sound gate usually satisfies it in practice.
+- **A YouTube embed obeys YouTube.** Ads, age gates and unavailable-in-your-country
+  are outside our control; an uploaded file never surprises you mid-game.
 
 ### Boards
 
-- **No auth.** Anyone with a board code can load it, overwrite it, edit it live,
-  or upload media to it.
 - **No way to delete a board.** `/boards/:code` has no DELETE, so a board and its
-  media live forever once created.
+  media live forever once created. Its media *is* now counted against the budget.
 - **No browsing or search** — codes are the only way in. Deliberate.
+- **Losing the edit key loses write access**, with no recovery. Boards are cheap
+  to remake and a recovery path would be a way in for everyone else.
+
+### Rooms
+
+- **A room mid-game across a deploy of the round changes** sees an empty board:
+  played clues are keyed by round now, and the old keys no longer match. Rooms
+  are ephemeral and expire in 12 hours, so this only bites a game in progress.
+
+### Infrastructure
+
+- **The worker and R2 bucket are still named `guardian-jeopardy-*`.** Renaming
+  the worker publishes a second one and strands every Durable Object; a bucket
+  cannot be renamed at all. Both are commented in `wrangler.jsonc`. Changing
+  them is a planned migration, not a tidy-up.
 
 ### Collaboration
 

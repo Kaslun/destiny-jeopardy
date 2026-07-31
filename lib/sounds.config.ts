@@ -23,6 +23,11 @@ export const SOUND_FILES: Partial<Record<Cue, string>> = {
    finalThink: "/sounds/finalThink.mp3",
    reveal: "/sounds/reveal.wav",
    join: "/sounds/join.wav",
+   // buzzersOpen: "/sounds/buzzersOpen.wav",
+   // A looping ambient bed under the board between clues. Point this at a file
+   // that loops cleanly and sits well below the other cues — it plays under the
+   // host talking, so anything with a melody will fight them.
+   // boardBed: "/sounds/boardBed.mp3",
 };
 
 /**
@@ -32,4 +37,6 @@ export const SOUND_FILES: Partial<Record<Cue, string>> = {
 export const SOUND_GAIN: Partial<Record<Cue, number>> = {
    buzz: 0.9,
    finalThink: 0.5,
+   // Ambience, not a cue. It should be barely there.
+   boardBed: 0.25,
 };

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import PartySocket from "partysocket";
+import { keyFor } from "./keys";
+import { read, write } from "./storage";
 import type {
   BoardClientMessage,
   BoardOp,
@@ -20,6 +22,8 @@ export interface BoardSession {
   error: string | null;
   send: (op: BoardOp) => void;
   setFocus: (focus: { catId: string; row: number } | null) => void;
+  /** False when this browser lacks the board's edit key. */
+  canEdit: boolean;
 }
 
 /**
@@ -33,6 +37,9 @@ export function useBoard(slug: string | null, name: string): BoardSession {
   const [you, setYou] = useState("");
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Assumed until the board says otherwise, so the editor does not flash
+  // read-only on every connect before the access reply lands.
+  const [canEdit, setCanEdit] = useState(true);
 
   const socketRef = useRef<PartySocket | null>(null);
   const nameRef = useRef(name);
@@ -51,7 +58,13 @@ export function useBoard(slug: string | null, name: string): BoardSession {
     const onOpen = () => {
       setConnected(true);
       setError(null);
-      socket.send(JSON.stringify({ type: "hello", name: nameRef.current } satisfies BoardClientMessage));
+      socket.send(
+        JSON.stringify({
+          type: "hello",
+          name: nameRef.current,
+          key: keyFor("edit-key", slug.toUpperCase()),
+        } satisfies BoardClientMessage),
+      );
     };
     const onClose = () => setConnected(false);
     const onMessage = (event: MessageEvent<string>) => {
@@ -66,6 +79,8 @@ export function useBoard(slug: string | null, name: string): BoardSession {
         setEditors(msg.editors);
         // Only the first message carries our own id; later broadcasts leave it blank.
         if (msg.you) setYou(msg.you);
+      } else if (msg.type === "access") {
+        setCanEdit(msg.canEdit);
       } else if (msg.type === "editors") {
         setEditors(msg.editors);
       } else if (msg.type === "error") {
@@ -108,23 +123,13 @@ export function useBoard(slug: string | null, name: string): BoardSession {
     }
   }, []);
 
-  return { game, editors, you, connected, error, send, setFocus };
+  return { game, editors, you, connected, error, send, setFocus, canEdit };
 }
 
-const NAME_KEY = "guardian-jeopardy/editor-name";
-
 export function storedEditorName(): string {
-  try {
-    return localStorage.getItem(NAME_KEY) || "";
-  } catch {
-    return "";
-  }
+  return read("editor-name") || "";
 }
 
 export function storeEditorName(name: string): void {
-  try {
-    localStorage.setItem(NAME_KEY, name);
-  } catch {
-    /* storage unavailable — the name just won't persist */
-  }
+  write("editor-name", name);
 }

@@ -2,25 +2,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import PartySocket from "partysocket";
+import { keyFor } from "./keys";
+import { read, write } from "./storage";
 import type { ClientMessage, RoomState, ServerMessage, Role } from "../shared/protocol";
 
 const PARTY_HOST = process.env.NEXT_PUBLIC_PARTY_HOST || "127.0.0.1:8787";
 
 /** Stable per-browser player id, so a refresh rejoins the same seat. */
 export function playerId(): string {
-  const KEY = "guardian-jeopardy/player-id";
-  try {
-    let id = localStorage.getItem(KEY);
-    if (!id) {
-      id = crypto.randomUUID();
-      localStorage.setItem(KEY, id);
-    }
-    return id;
-  } catch {
-    // Private mode / sandboxed: fall back to a per-tab id. The player keeps
-    // their seat for this tab's lifetime, just not across a reload.
-    return crypto.randomUUID();
-  }
+  const existing = read("player-id");
+  if (existing) return existing;
+  // No id, or storage is unavailable (private mode). Either way a fresh one
+  // works; if the write below is a no-op the player simply keeps their seat for
+  // this tab's lifetime rather than across a reload.
+  const id = crypto.randomUUID();
+  write("player-id", id);
+  return id;
 }
 
 export interface Room {
@@ -103,5 +100,10 @@ export function useRoom(room: string, join: Extract<ClientMessage, { type: "join
 
 export function useRole(room: string, role: Role, name?: string, cls?: string): Room {
   const [id] = useState(() => (role === "player" ? playerId() : undefined));
-  return useRoom(room, { type: "join", role, playerId: id, name, cls });
+  // Read once: `keyFor` mints and stores a key on first call, and re-running it
+  // every render would be pointless churn. Only a host needs one.
+  const [hostKey] = useState(() =>
+    role === "host" && room ? keyFor("host-key", room.toUpperCase()) : undefined,
+  );
+  return useRoom(room, { type: "join", role, playerId: id, name, cls, hostKey });
 }

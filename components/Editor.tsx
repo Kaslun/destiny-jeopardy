@@ -2,26 +2,33 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { C, mono } from "../lib/theme";
+import { alpha, C, mono, newRoomCode } from "../lib/theme";
+import { keyFor, linkWithKey } from "../lib/keys";
 import { loadBoard, myBoards, rememberBoard, saveBoard, type BoardRef } from "../lib/boards";
 import { storeEditorName, storedEditorName, useBoard } from "../lib/useBoard";
-import { mediaLimitLabel, uploadMedia } from "../lib/media";
+import { readJson, writeJson } from "../lib/storage";
+import { useTheme } from "../lib/useTheme";
+import { DEFAULT_THEME_ID, THEMES } from "../lib/themes";
+import { mediaLimitLabel, storageUsage, uploadMedia } from "../lib/media";
 import { ClueMedia } from "./ClueMedia";
 import {
   applyBoardOp,
   DEFAULT_CLUE_SECONDS,
+  DEFAULT_READ_SECONDS,
   MAX_CATS,
+  MAX_ROUNDS,
   MIN_CATS,
   newSlug,
   parseGame,
+  formatBytes,
   ROWS,
+  youTubeId,
   type BoardOp,
+  type StorageUsage,
   type Clue,
   type EditorPresence,
   type Game,
 } from "../shared/protocol";
-
-const DRAFT_KEY = "guardian-jeopardy/draft";
 
 function blankGame(): Game {
   return parseGame({
@@ -30,10 +37,22 @@ function blankGame(): Game {
     values: [200, 400, 600, 800, 1000],
     categories: [{ name: "CATEGORY ONE" }, { name: "CATEGORY TWO" }, { name: "CATEGORY THREE" }],
     final: { category: "", t: "", a: "" },
+    theme: DEFAULT_THEME_ID,
   })!;
 }
 
-const isReady = (q: Clue) => !!(q.t.trim() && q.a.trim());
+/**
+ * Whether a clue is finished enough to play.
+ *
+ * The answer is the one thing every clue needs — without it the host has
+ * nothing to rule against. The *question* can be an image or a video instead of
+ * text: "what is this?" over a photograph is a complete clue, and requiring
+ * words as well marked a whole board of picture rounds as unfinished.
+ */
+const isReady = (q: Clue) => !!(q.a.trim() && (q.t.trim() || q.media));
+
+/** Started but not finished — worth flagging amber rather than empty. */
+const isStarted = (q: Clue) => !isReady(q) && !!(q.t.trim() || q.a.trim() || q.media);
 const trunc = (s: string, n: number) => {
   const t = s.trim().replace(/\s+/g, " ");
   return t.length > n ? t.slice(0, n - 1) + "…" : t;
@@ -43,7 +62,8 @@ export default function Editor({ slug }: { slug?: string }) {
   const router = useRouter();
   const [name, setName] = useState("EDITOR");
   const [draft, setDraft] = useState<Game | null>(null);
-  const [sel, setSel] = useState({ c: 0, r: 0 });
+  /** Which round is being edited, and the cell selected within it. */
+  const [sel, setSel] = useState({ round: 0, c: 0, r: 0 });
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [ioOpen, setIoOpen] = useState(false);
@@ -52,6 +72,10 @@ export default function Editor({ slug }: { slug?: string }) {
   const [armed, setArmed] = useState("");
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
+  /** The YouTube URL being pasted for the selected clue. */
+  const [youtube, setYoutube] = useState("");
+  /** How much of the storage budget this board is using. Null until known. */
+  const [usage, setUsage] = useState<StorageUsage | null>(null);
 
   const live = useBoard(slug ?? null, name);
   const collaborative = !!slug;
@@ -61,31 +85,30 @@ export default function Editor({ slug }: { slug?: string }) {
     setName(storedEditorName() || "EDITOR");
   }, []);
 
+  // Only a saved board occupies storage — a local draft has nowhere to put a
+  // file yet, so there is nothing to report.
+  useEffect(() => {
+    if (slug) void storageUsage(slug).then(setUsage);
+  }, [slug]);
+
   // Offline drafts only: restore whatever was last being worked on.
   useEffect(() => {
     if (collaborative) return;
-    try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      const parsed = raw ? parseGame(JSON.parse(raw)) : null;
-      setDraft(parsed ?? blankGame());
-    } catch {
-      setDraft(blankGame());
-    }
+    const saved = readJson<unknown>("draft");
+    setDraft((saved ? parseGame(saved) : null) ?? blankGame());
   }, [collaborative]);
 
   const game = collaborative ? live.game : draft;
 
   useEffect(() => {
     if (collaborative || !draft) return;
-    const id = setTimeout(() => {
-      try {
-        localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-      } catch {
-        /* storage unavailable — export still works */
-      }
-    }, 300);
+    const id = setTimeout(() => writeJson("draft", draft), 300);
     return () => clearTimeout(id);
   }, [draft, collaborative]);
+
+  // The editor wears the board it is editing, so the theme picker previews
+  // itself and every colour on this screen is the one the room will see.
+  const theme = useTheme(game?.theme);
 
   /**
    * Every mutation in this editor is an operation. Collaborative boards send it
@@ -101,7 +124,11 @@ export default function Editor({ slug }: { slug?: string }) {
     [collaborative, live],
   );
 
-  const selCat = game?.categories[sel.c] ?? null;
+  // Clamped rather than trusted: a collaborator can delete the round you are
+  // looking at, and an index pointing past the end would blank the editor.
+  const roundIndex = game ? Math.min(sel.round, game.rounds.length - 1) : 0;
+  const selRound = game?.rounds[roundIndex] ?? null;
+  const selCat = selRound?.categories[sel.c] ?? null;
   const selCatId = selCat?.id ?? "";
 
   // Tell the others which cell you're in, so they can steer clear of it.
@@ -110,11 +137,16 @@ export default function Editor({ slug }: { slug?: string }) {
     live.setFocus({ catId: selCatId, row: sel.r });
   }, [collaborative, selCatId, sel.r, live]);
 
+  // Counted across every round: the progress bar is about the whole game being
+  // ready to play, and a round-local count would read 100% with round two blank.
   const stats = useMemo(() => {
     if (!game) return { ready: 0, total: 0, pct: 0 };
-    const total = game.categories.length * ROWS;
+    let total = 0;
     let ready = 0;
-    for (const cat of game.categories) for (const q of cat.clues) if (isReady(q)) ready++;
+    for (const round of game.rounds) {
+      total += round.categories.length * ROWS;
+      for (const cat of round.categories) for (const q of cat.clues) if (isReady(q)) ready++;
+    }
     return { ready, total, pct: total ? Math.round((ready / total) * 100) : 0 };
   }, [game]);
 
@@ -142,7 +174,9 @@ export default function Editor({ slug }: { slug?: string }) {
   const selClue: Clue = selCat?.clues[sel.r] ?? { t: "", a: "" };
   const media = selClue.media ?? "";
   const boardSeconds = game.timerSeconds ?? DEFAULT_CLUE_SECONDS;
-  const finalReady = !!(game.final?.t.trim() && game.final?.a.trim());
+  const boardReadSeconds = game.readSeconds ?? DEFAULT_READ_SECONDS;
+  // Same rule as a board clue: an answer, plus either words or something to look at.
+  const finalReady = !!(game.final?.a.trim() && (game.final?.t.trim() || game.final?.media));
 
   const publish = async () => {
     setBusy(true);
@@ -184,6 +218,33 @@ export default function Editor({ slug }: { slug?: string }) {
     } finally {
       setUploading(false);
       setUploadPct(0);
+      // Refresh after every attempt, successful or not: a failure is often
+      // *because* the board is full, which is exactly when the number matters.
+      if (slug) void storageUsage(slug).then(setUsage);
+    }
+  };
+
+  const attachYouTube = () => {
+    const id = youTubeId(youtube);
+    if (!id) {
+      setNote({ text: "THAT DOESN'T LOOK LIKE A YOUTUBE LINK", ok: false });
+      return;
+    }
+    // Stored in `mediaKey` like an upload's object key. Same field, same
+    // question on every screen: is there something here, and what do I point at?
+    emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: "youtube", key: id });
+    setYoutube("");
+    setNote({ text: `ATTACHED YOUTUBE ${id}`, ok: true });
+  };
+
+  const copy = async (text: string, message: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setNote({ text: message, ok: true });
+    } catch {
+      // No clipboard permission, or an insecure origin. Showing the link is
+      // still useful — it can be selected by hand.
+      setNote({ text: text.toUpperCase(), ok: true });
     }
   };
 
@@ -207,13 +268,13 @@ export default function Editor({ slug }: { slug?: string }) {
         }}
       >
         <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: ".1em" }}>BOARD EDITOR</div>
-        <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".16em", color: "#7d879c" }}>
+        <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".16em", color: C.muted }}>
           {stats.ready} / {stats.total} READY
         </div>
-        <div style={{ width: 130, height: 7, background: "#0f141d", border: `1px solid ${C.line}` }}>
-          <div style={{ height: "100%", width: `${stats.pct}%`, background: `linear-gradient(90deg,${C.green},${C.gold})` }} />
+        <div style={{ width: 130, height: 7, background: C.surfaceDeep, border: `1px solid ${C.line}` }}>
+          <div style={{ height: "100%", width: `${stats.pct}%`, background: `linear-gradient(90deg,${C.good},${C.accent})` }} />
         </div>
-        <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".14em", color: finalReady ? C.violet : C.faint }}>
+        <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".14em", color: finalReady ? C.special : C.faint }}>
           ◆ FINAL {finalReady ? "READY" : "EMPTY"}
         </div>
 
@@ -231,10 +292,36 @@ export default function Editor({ slug }: { slug?: string }) {
               }}
               style={{ width: 120, padding: "7px 9px", fontFamily: mono, fontSize: 11, letterSpacing: ".12em" }}
             />
-            <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".18em", color: C.gold }}>CODE {slug}</div>
+            <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".18em", color: C.accent }}>CODE {slug}</div>
+            {/* Two different links, because they grant different things: the
+                read-only one is for whoever is hosting, the edit one is for a
+                co-author. Labelling them apart is the whole safeguard. */}
+            <button onClick={() => copy(`${location.origin}/edit/${slug}`, "SHARE LINK COPIED — READ-ONLY")} style={btn}>
+              ⧉ LINK
+            </button>
+            {live.canEdit && (
+              <button
+                onClick={() =>
+                  copy(
+                    linkWithKey(`/edit/${slug}`, keyFor("edit-key", slug!)),
+                    "EDIT LINK COPIED — ANYONE WITH IT CAN CHANGE THIS BOARD",
+                  )
+                }
+                style={{ ...btn, color: C.accent, borderColor: C.accentDeep }}
+              >
+                ⧉ EDIT LINK
+              </button>
+            )}
+            <button
+              onClick={() => router.push(`/host/${newRoomCode()}?board=${slug}`)}
+              className="tap lift"
+              style={{ ...btn, background: C.accent, color: C.onAccent, border: "none", fontWeight: 600 }}
+            >
+              ▶ START A GAME
+            </button>
           </>
         ) : (
-          <button onClick={publish} disabled={busy} style={{ ...btn, background: C.green, color: "#0a0d14", border: "none" }}>
+          <button onClick={publish} disabled={busy} style={{ ...btn, background: C.good, color: C.onAccent, border: "none" }}>
             {busy ? "PUBLISHING…" : "↑ SAVE & SHARE"}
           </button>
         )}
@@ -250,7 +337,7 @@ export default function Editor({ slug }: { slug?: string }) {
             fontFamily: mono,
             fontSize: 11,
             letterSpacing: ".14em",
-            color: note?.ok ? C.green : C.orange,
+            color: note?.ok ? C.good : C.warn,
             borderBottom: `1px solid ${C.lineSoft}`,
           }}
         >
@@ -274,22 +361,78 @@ export default function Editor({ slug }: { slug?: string }) {
             </Field>
           </Section>
 
-          <Section label="VALUE LADDER">
-            {game.values.map((v, i) => (
+          <Section label="THEME">
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {THEMES.map((t) => {
+                const on = t.id === theme.id;
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => emit({ type: "theme", value: t.id })}
+                    title={t.blurb}
+                    style={{
+                      ...btn,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      textAlign: "left",
+                      padding: "8px 10px",
+                      color: on ? C.accent : C.dim,
+                      borderColor: on ? C.accent : C.edgeSoft,
+                    }}
+                  >
+                    {/* Each theme's own accent, not the live one — the point is
+                        to see what you are choosing before you choose it. */}
+                    <span
+                      style={{
+                        width: 12,
+                        height: 12,
+                        flex: "none",
+                        background: t.colors.accent,
+                        border: `1px solid ${t.colors.edge}`,
+                        transform: "rotate(45deg)",
+                      }}
+                    />
+                    <span style={{ flex: 1, minWidth: 0 }}>{t.name.toUpperCase()}</span>
+                    {on && <span style={{ fontSize: 9, color: C.accent }}>●</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint, lineHeight: 1.7 }}>
+              {theme.blurb.toUpperCase()}
+            </div>
+          </Section>
+
+          <Section label={`VALUE LADDER · ${selRound?.name || `ROUND ${roundIndex + 1}`}`}>
+            {(selRound?.values ?? []).map((v, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                <div style={{ fontFamily: mono, fontSize: 11, color: "#6b7488", width: 22 }}>R{i + 1}</div>
+                <div style={{ fontFamily: mono, fontSize: 11, color: C.mutedDeep, width: 22 }}>R{i + 1}</div>
                 <Synced
+                  key={`${roundIndex}:${i}`}
                   value={String(v)}
-                  onCommit={(raw) => emit({ type: "value", row: i, value: Number(raw.replace(/[^0-9-]/g, "")) || 0 })}
+                  onCommit={(raw) =>
+                    emit({
+                      type: "value",
+                      round: roundIndex,
+                      row: i,
+                      value: Number(raw.replace(/[^0-9-]/g, "")) || 0,
+                    })
+                  }
                   style={{ ...input, flex: 1, fontFamily: mono, fontSize: 13 }}
                 />
               </div>
             ))}
+            {roundIndex > 0 && (
+              <button onClick={() => emit({ type: "roundDouble", index: roundIndex })} style={{ ...btn, fontSize: 10 }}>
+                ×2 MATCH THE PREVIOUS ROUND, DOUBLED
+              </button>
+            )}
           </Section>
 
           <Section label="TIMER">
             <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <div style={{ fontFamily: mono, fontSize: 10, color: "#6b7488", flex: 1 }}>BOARD DEFAULT</div>
+              <div style={{ fontFamily: mono, fontSize: 10, color: C.mutedDeep, flex: 1 }}>BOARD DEFAULT</div>
               <Synced
                 value={String(boardSeconds)}
                 onCommit={(raw) => {
@@ -300,8 +443,19 @@ export default function Editor({ slug }: { slug?: string }) {
               />
               <span style={{ fontFamily: mono, fontSize: 11, color: C.faint }}>SEC</span>
             </div>
-            <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint }}>
-              ANY CLUE CAN OVERRIDE THIS
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <div style={{ fontFamily: mono, fontSize: 10, color: C.mutedDeep, flex: 1 }}>READ DELAY</div>
+              <Synced
+                value={String(boardReadSeconds)}
+                onCommit={(raw) => emit({ type: "boardReadSeconds", value: Number(raw.replace(/[^0-9]/g, "")) || 0 })}
+                style={{ ...input, width: 74, fontFamily: mono, fontSize: 13, textAlign: "center" }}
+              />
+              <span style={{ fontFamily: mono, fontSize: 11, color: C.faint }}>SEC</span>
+            </div>
+            <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint, lineHeight: 1.8 }}>
+              ANY CLUE CAN OVERRIDE BOTH. THE READ DELAY HOLDS
+              <br />
+              THE BUZZERS SHUT WHILE THE CLUE IS READ OUT.
             </div>
           </Section>
 
@@ -328,7 +482,7 @@ export default function Editor({ slug }: { slug?: string }) {
                 value={game.final?.a ?? ""}
                 onCommit={(v) => emit({ type: "final", field: "a", value: v })}
                 placeholder="What is …?"
-                style={{ ...input, color: C.cyan, fontWeight: 600 }}
+                style={{ ...input, color: C.info, fontWeight: 600 }}
               />
             </Field>
             <Field label="TIME TO WRITE">
@@ -339,9 +493,9 @@ export default function Editor({ slug }: { slug?: string }) {
                   padding: "9px",
                   fontSize: 10,
                   fontWeight: 600,
-                  color: game.final?.timerOff ? "#0a0d14" : C.text,
-                  background: game.final?.timerOff ? C.orange : "#141b28",
-                  borderColor: game.final?.timerOff ? C.orange : "#2f3a4f",
+                  color: game.final?.timerOff ? C.onAccent : C.text,
+                  background: game.final?.timerOff ? C.warn : C.surface,
+                  borderColor: game.final?.timerOff ? C.warn : C.edge,
                 }}
               >
                 {game.final?.timerOff ? "⏸ NO TIMER" : "⏱ TIMED"}
@@ -362,6 +516,27 @@ export default function Editor({ slug }: { slug?: string }) {
               )}
             </Field>
 
+            <Field label="READ DELAY">
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <Synced
+                  value={game.final?.readSeconds === undefined ? "" : String(game.final.readSeconds)}
+                  onCommit={(raw) => {
+                    const trimmed = raw.trim();
+                    emit({
+                      type: "finalReadSeconds",
+                      value: trimmed === "" ? null : Number(trimmed.replace(/[^0-9]/g, "")) || 0,
+                    });
+                  }}
+                  placeholder={`${boardReadSeconds} (BOARD DEFAULT)`}
+                  style={{ ...input, flex: 1, fontFamily: mono, fontSize: 12 }}
+                />
+                <span style={{ fontFamily: mono, fontSize: 10, color: C.faint }}>SEC</span>
+              </div>
+              <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint, marginTop: 4 }}>
+                THE WRITING CLOCK STARTS AFTER THIS.
+              </div>
+            </Field>
+
             <Field label="MEDIA">
               {game.final?.mediaKey ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -375,9 +550,9 @@ export default function Editor({ slug }: { slug?: string }) {
                   <div style={{ display: "flex", gap: 6 }}>
                     <label style={{ ...btn, flex: 1, textAlign: "center", cursor: "pointer", fontSize: 10 }}>
                       ⟳ REPLACE
-                      <input type="file" accept="image/*,video/*" hidden onChange={(e) => onPickFile(e, "final")} />
+                      <input type="file" accept="image/*,video/*,audio/*" hidden onChange={(e) => onPickFile(e, "final")} />
                     </label>
-                    <button onClick={() => emit({ type: "finalMedia", value: null })} style={{ ...btn, flex: 1, fontSize: 10, color: C.orange }}>
+                    <button onClick={() => emit({ type: "finalMedia", value: null })} style={{ ...btn, flex: 1, fontSize: 10, color: C.warn }}>
                       ✕ REMOVE
                     </button>
                   </div>
@@ -394,7 +569,7 @@ export default function Editor({ slug }: { slug?: string }) {
                   }}
                 >
                   {uploading ? `UPLOADING ${Math.round(uploadPct * 100)}%` : "⬆ IMAGE OR VIDEO"}
-                  <input type="file" accept="image/*,video/*" hidden disabled={uploading} onChange={(e) => onPickFile(e, "final")} />
+                  <input type="file" accept="image/*,video/*,audio/*" hidden disabled={uploading} onChange={(e) => onPickFile(e, "final")} />
                 </label>
               )}
             </Field>
@@ -403,7 +578,7 @@ export default function Editor({ slug }: { slug?: string }) {
           <Section label="BOARD">
             <button
               onClick={armThen("blank", () => emit({ type: "replace", game: blankGame() }))}
-              style={{ ...btn, color: armed === "blank" ? C.orange : C.text, borderColor: armed === "blank" ? C.orange : "#26303f" }}
+              style={{ ...btn, color: armed === "blank" ? C.warn : C.text, borderColor: armed === "blank" ? C.warn : C.edgeSoft }}
             >
               {armed === "blank" ? "TAP AGAIN — WIPES EVERYTHING" : "✕ BLANK BOARD"}
             </button>
@@ -422,13 +597,13 @@ export default function Editor({ slug }: { slug?: string }) {
                     display: "flex",
                     gap: 8,
                     padding: "7px 9px",
-                    background: b.slug === slug ? "rgba(240,196,105,.1)" : "#0f141d",
-                    border: `1px solid ${b.slug === slug ? C.goldDeep : "#1e2635"}`,
+                    background: b.slug === slug ? alpha(C.accent, 10) : C.surfaceDeep,
+                    border: `1px solid ${b.slug === slug ? C.accentDeep : C.lineFaint}`,
                     textDecoration: "none",
                     color: C.text,
                   }}
                 >
-                  <span style={{ fontFamily: mono, fontSize: 11, color: C.gold }}>{b.slug}</span>
+                  <span style={{ fontFamily: mono, fontSize: 11, color: C.accent }}>{b.slug}</span>
                   <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.title}</span>
                 </a>
               ))}
@@ -438,15 +613,75 @@ export default function Editor({ slug }: { slug?: string }) {
 
         {/* ---- centre ---- */}
         <section style={{ padding: 16, display: "flex", flexDirection: "column", gap: 11, minWidth: 0, minHeight: 0 }}>
+          {/* One tab per round. The rounds are played in this order, so they
+              are shown in it — there is no reordering control because moving
+              round two in front of round one is not a thing anyone means. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            {game.rounds.map((r, i) => {
+              const on = i === roundIndex;
+              return (
+                <button
+                  key={r.id ?? i}
+                  onClick={() => setSel({ round: i, c: 0, r: 0 })}
+                  className="tap"
+                  style={{
+                    ...btn,
+                    padding: "8px 14px",
+                    fontWeight: 600,
+                    color: on ? C.onAccent : C.dim,
+                    background: on ? C.accent : C.surface,
+                    borderColor: on ? C.accent : C.edge,
+                  }}
+                >
+                  {r.name || `ROUND ${i + 1}`}
+                </button>
+              );
+            })}
+            {game.rounds.length < MAX_ROUNDS && (
+              <button
+                onClick={() => {
+                  emit({ type: "roundAdd" });
+                  setSel({ round: game.rounds.length, c: 0, r: 0 });
+                }}
+                style={{ ...btn, color: C.good, borderColor: C.edge }}
+              >
+                + ROUND
+              </button>
+            )}
+            {game.rounds.length > 1 && (
+              <button
+                onClick={armThen("delround", () => {
+                  emit({ type: "roundDelete", index: roundIndex });
+                  setSel({ round: Math.max(0, roundIndex - 1), c: 0, r: 0 });
+                })}
+                style={{
+                  ...btn,
+                  color: armed === "delround" ? C.onAccent : C.warn,
+                  background: armed === "delround" ? C.warn : C.surface,
+                  borderColor: C.warn,
+                }}
+              >
+                {armed === "delround" ? "TAP AGAIN — DELETES THIS ROUND" : "✕ ROUND"}
+              </button>
+            )}
+          </div>
+
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: "#7d879c" }}>
+            <Synced
+              key={`roundname:${roundIndex}`}
+              value={selRound?.name ?? ""}
+              onCommit={(v) => emit({ type: "roundName", index: roundIndex, value: v })}
+              placeholder="ROUND NAME"
+              style={{ ...input, width: 190, fontFamily: mono, fontSize: 11, letterSpacing: ".14em" }}
+            />
+            <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: C.muted }}>
               {collaborative ? "EVERYONE HERE EDITS THE SAME BOARD, LIVE" : "CLICK A CELL TO WRITE IT"}
             </div>
             <div style={{ flex: 1 }} />
             <button
-              onClick={() => emit({ type: "catAdd" })}
-              disabled={game.categories.length >= MAX_CATS}
-              style={{ ...btn, background: C.green, color: "#0a0d14", border: "none" }}
+              onClick={() => emit({ type: "catAdd", round: roundIndex })}
+              disabled={(selRound?.categories.length ?? 0) >= MAX_CATS}
+              style={{ ...btn, background: C.good, color: C.onAccent, border: "none" }}
             >
               + ADD CATEGORY
             </button>
@@ -457,26 +692,26 @@ export default function Editor({ slug }: { slug?: string }) {
               flex: 1,
               minHeight: 0,
               display: "grid",
-              gridTemplateColumns: `repeat(${game.categories.length}, minmax(0,1fr))`,
+              gridTemplateColumns: `repeat(${selRound?.categories.length ?? 1}, minmax(0,1fr))`,
               gap: 7,
             }}
           >
-            {game.categories.map((cat, ci) => (
+            {(selRound?.categories ?? []).map((cat, ci) => (
               <div key={cat.id} style={{ display: "grid", gridTemplateRows: `72px repeat(${ROWS},1fr)`, gap: 6, minWidth: 0 }}>
                 <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                   <Synced
                     value={cat.name}
                     onCommit={(v) => emit({ type: "catName", catId: cat.id!, value: v })}
                     placeholder="CATEGORY"
-                    style={{ ...input, textAlign: "center", fontWeight: 600, borderTop: `2px solid ${C.gold}` }}
+                    style={{ ...input, textAlign: "center", fontWeight: 600, borderTop: `2px solid ${C.accent}` }}
                   />
                   <div style={{ display: "flex", gap: 4 }}>
                     <button onClick={() => emit({ type: "catMove", catId: cat.id!, dir: -1 })} style={{ ...miniBtn, flex: 1 }}>◀</button>
                     <button onClick={() => emit({ type: "catMove", catId: cat.id!, dir: 1 })} style={{ ...miniBtn, flex: 1 }}>▶</button>
                     <button
                       onClick={() => emit({ type: "catDelete", catId: cat.id! })}
-                      disabled={game.categories.length <= MIN_CATS}
-                      style={{ ...miniBtn, flex: 1, color: game.categories.length > MIN_CATS ? C.orange : "#2f3a4f" }}
+                      disabled={(selRound?.categories.length ?? 0) <= MIN_CATS}
+                      style={{ ...miniBtn, flex: 1, color: (selRound?.categories.length ?? 0) > MIN_CATS ? C.warn : C.edge }}
                     >
                       ✕
                     </button>
@@ -485,13 +720,13 @@ export default function Editor({ slug }: { slug?: string }) {
 
                 {cat.clues.map((q, ri) => {
                   const done = isReady(q);
-                  const started = !done && !!(q.t.trim() || q.a.trim());
+                  const started = isStarted(q);
                   const active = ci === sel.c && ri === sel.r;
                   const watchers = focusByCell.get(`${cat.id}:${ri}`) ?? [];
                   return (
                     <button
                       key={q.id ?? ri}
-                      onClick={() => setSel({ c: ci, r: ri })}
+                      onClick={() => setSel({ round: roundIndex, c: ci, r: ri })}
                       className="tap"
                       style={{
                         position: "relative",
@@ -502,14 +737,14 @@ export default function Editor({ slug }: { slug?: string }) {
                         flexDirection: "column",
                         gap: 5,
                         overflow: "hidden",
-                        background: active ? "rgba(240,196,105,.1)" : done ? C.tile : "#090c13",
-                        border: `1px solid ${watchers.length ? watchers[0].color : active ? C.gold : "#1e2635"}`,
+                        background: active ? alpha(C.accent, 10) : done ? C.tile : C.panelDeep,
+                        border: `1px solid ${watchers.length ? watchers[0].color : active ? C.accent : C.lineFaint}`,
                         clipPath: "polygon(0 0,100% 0,100% 84%,93% 100%,0 100%)",
                       }}
                     >
                       <div style={{ display: "flex", alignItems: "center", gap: 5, width: "100%" }}>
-                        <span style={{ fontFamily: mono, fontSize: 11, fontWeight: 600, color: active ? C.gold : "#6b7488" }}>
-                          {game.values[ri]}
+                        <span style={{ fontFamily: mono, fontSize: 11, fontWeight: 600, color: active ? C.accent : C.mutedDeep }}>
+                          {selRound?.values[ri]}
                         </span>
                         <span style={{ flex: 1 }} />
                         {watchers.map((w) => (
@@ -522,25 +757,46 @@ export default function Editor({ slug }: { slug?: string }) {
                         {q.timerOff && (
                           <span
                             title="No timer"
-                            style={{ fontFamily: mono, fontSize: 9, color: C.orange, border: `1px solid ${C.orange}`, padding: "0 3px", lineHeight: 1.3 }}
+                            style={{ fontFamily: mono, fontSize: 9, color: C.warn, border: `1px solid ${C.warn}`, padding: "0 3px", lineHeight: 1.3 }}
                           >
                             ∞
                           </span>
                         )}
+                        {!!(q.readSeconds ?? boardReadSeconds) && (
+                          <span
+                            title={`Buzzers open ${q.readSeconds ?? boardReadSeconds}s after this clue appears`}
+                            style={{
+                              fontFamily: mono,
+                              fontSize: 8,
+                              color: C.info,
+                              border: `1px solid ${alpha(C.info, 35)}`,
+                              padding: "1px 3px",
+                              lineHeight: 1.3,
+                            }}
+                          >
+                            ⏸{q.readSeconds ?? boardReadSeconds}
+                          </span>
+                        )}
                         {q.dd && (
-                          <span style={{ fontFamily: mono, fontSize: 8, color: "#0a0d14", background: C.orange, padding: "1px 4px" }}>DD</span>
+                          <span style={{ fontFamily: mono, fontSize: 8, color: C.onAccent, background: C.warn, padding: "1px 4px" }}>DD</span>
                         )}
                         {q.media && (
-                          <span style={{ fontFamily: mono, fontSize: 8, color: C.cyan, border: `1px solid #1d3d4a`, padding: "1px 4px" }}>
+                          <span style={{ fontFamily: mono, fontSize: 8, color: C.info, border: `1px solid ${alpha(C.info, 35)}`, padding: "1px 4px" }}>
                             {q.media === "video" ? "VID" : "IMG"}
                           </span>
                         )}
                         <span
-                          style={{ width: 6, height: 6, transform: "rotate(45deg)", background: done ? C.green : started ? C.orange : "#2f3a4f" }}
+                          style={{ width: 6, height: 6, transform: "rotate(45deg)", background: done ? C.good : started ? C.warn : C.edge }}
                         />
                       </div>
-                      <div style={{ fontSize: 11, lineHeight: 1.35, color: q.t.trim() ? "#c9d2e2" : C.faint }}>
-                        {q.t.trim() ? trunc(q.t, 58) : "EMPTY"}
+                      <div style={{ fontSize: 11, lineHeight: 1.35, color: q.t.trim() || q.media ? C.text : C.faint }}>
+                        {/* A media clue with no words is not empty — say what
+                            it actually is rather than calling it unwritten. */}
+                        {q.t.trim()
+                          ? trunc(q.t, 58)
+                          : q.media
+                            ? q.mediaLabel?.trim() || `[ ${q.media.toUpperCase()} ]`
+                            : "EMPTY"}
                       </div>
                     </button>
                   );
@@ -564,7 +820,7 @@ export default function Editor({ slug }: { slug?: string }) {
                       setNote({ text: (err as Error).message.toUpperCase(), ok: false });
                     }
                   }}
-                  style={{ ...btn, background: C.green, color: "#0a0d14", border: "none" }}
+                  style={{ ...btn, background: C.good, color: C.onAccent, border: "none" }}
                 >
                   ↓ LOAD
                 </button>
@@ -582,10 +838,10 @@ export default function Editor({ slug }: { slug?: string }) {
         {/* ---- right ---- */}
         <aside style={{ ...aside, borderLeft: `1px solid ${C.lineSoft}`, borderRight: "none" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: C.gold, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: C.accent, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {selCat?.name || "UNTITLED"}
             </div>
-            <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: "#9fb0c8" }}>{game.values[sel.r]}</div>
+            <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: C.dim }}>{selRound?.values[sel.r]}</div>
           </div>
 
           {(() => {
@@ -624,7 +880,7 @@ export default function Editor({ slug }: { slug?: string }) {
               value={selClue.a}
               onCommit={(v) => emit({ type: "clueText", catId: selCatId, row: sel.r, field: "a", value: v })}
               placeholder="Who is …?"
-              style={{ ...input, fontSize: 16, fontWeight: 600, color: C.cyan }}
+              style={{ ...input, fontSize: 16, fontWeight: 600, color: C.info }}
             />
           </Field>
 
@@ -634,9 +890,9 @@ export default function Editor({ slug }: { slug?: string }) {
               ...btn,
               padding: "12px",
               fontWeight: 600,
-              color: selClue.dd ? "#0a0d14" : C.dim,
-              background: selClue.dd ? C.orange : "#141b28",
-              borderColor: selClue.dd ? C.orange : "#26303f",
+              color: selClue.dd ? C.onAccent : C.dim,
+              background: selClue.dd ? C.warn : C.surface,
+              borderColor: selClue.dd ? C.warn : C.edgeSoft,
             }}
           >
             {selClue.dd ? "◆ DAILY DOUBLE · ON" : "◇ MAKE THIS A DAILY DOUBLE"}
@@ -655,11 +911,11 @@ export default function Editor({ slug }: { slug?: string }) {
                 <div style={{ display: "flex", gap: 6 }}>
                   <label style={{ ...btn, flex: 1, textAlign: "center", cursor: "pointer" }}>
                     ⟳ REPLACE
-                    <input type="file" accept="image/*,video/*" hidden onChange={onPickFile} />
+                    <input type="file" accept="image/*,video/*,audio/*" hidden onChange={onPickFile} />
                   </label>
                   <button
                     onClick={() => emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: null })}
-                    style={{ ...btn, flex: 1, color: C.orange }}
+                    style={{ ...btn, flex: 1, color: C.warn }}
                   >
                     ✕ REMOVE
                   </button>
@@ -673,23 +929,57 @@ export default function Editor({ slug }: { slug?: string }) {
                     textAlign: "center",
                     cursor: uploading ? "progress" : "pointer",
                     borderStyle: "dashed",
-                    borderColor: uploading ? C.gold : "#2f3a4f",
+                    borderColor: uploading ? C.accent : C.edge,
                     padding: "14px",
                   }}
                 >
-                  {uploading ? `UPLOADING ${Math.round(uploadPct * 100)}%` : "⬆ UPLOAD IMAGE OR VIDEO"}
-                  <input type="file" accept="image/*,video/*" hidden disabled={uploading} onChange={onPickFile} />
+                  {uploading ? `UPLOADING ${Math.round(uploadPct * 100)}%` : "⬆ UPLOAD IMAGE, VIDEO OR AUDIO"}
+                  <input type="file" accept="image/*,video/*,audio/*" hidden disabled={uploading} onChange={onPickFile} />
                 </label>
                 {uploading && (
-                  <div style={{ height: 4, background: "#0f141d", border: `1px solid ${C.line}` }}>
-                    <div style={{ height: "100%", width: `${uploadPct * 100}%`, background: C.gold }} />
+                  <div style={{ height: 4, background: C.surfaceDeep, border: `1px solid ${C.line}` }}>
+                    <div style={{ height: "100%", width: `${uploadPct * 100}%`, background: C.accent }} />
                   </div>
                 )}
-                <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".12em", color: C.faint }}>
-                  UP TO {mediaLimitLabel()} · OR JUST MARK A PLACEHOLDER:
+
+                {/* A YouTube clue stores an id, not a file. It costs no storage,
+                    which is the difference between a board of clips being
+                    shareable and being a bill. */}
+                <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".12em", color: C.faint, marginTop: 4, lineHeight: 1.8 }}>
+                  UP TO {mediaLimitLabel()} PER FILE
+                  {usage && (
+                    <>
+                      {" · "}
+                      <span style={{ color: usage.board / usage.boardLimit > 0.8 ? C.warn : C.faint }}>
+                        THIS BOARD: {formatBytes(usage.board)} / {formatBytes(usage.boardLimit)}
+                      </span>
+                    </>
+                  )}
+                  <br />
+                  OR PASTE A YOUTUBE LINK — COSTS NO STORAGE:
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  {([["", "NONE"], ["image", "IMAGE"], ["video", "VIDEO"]] as const).map(([key, label]) => (
+                  <input
+                    value={youtube}
+                    onChange={(e) => setYoutube(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && attachYouTube()}
+                    placeholder="youtube.com/watch?v=…"
+                    style={{ ...input, flex: 1, fontFamily: mono, fontSize: 11 }}
+                  />
+                  <button
+                    onClick={attachYouTube}
+                    disabled={!youTubeId(youtube)}
+                    style={{ ...btn, fontSize: 10, color: youTubeId(youtube) ? C.accent : C.faint }}
+                  >
+                    ATTACH
+                  </button>
+                </div>
+
+                <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".12em", color: C.faint, marginTop: 4 }}>
+                  OR JUST MARK A PLACEHOLDER:
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {([["", "NONE"], ["image", "IMAGE"], ["video", "VIDEO"], ["audio", "AUDIO"]] as const).map(([key, label]) => (
                     <button
                       key={label}
                       onClick={() => emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: key === "" ? null : key })}
@@ -697,9 +987,9 @@ export default function Editor({ slug }: { slug?: string }) {
                         ...btn,
                         flex: 1,
                         fontSize: 10,
-                        color: media === key ? "#0a0d14" : C.dim,
-                        background: media === key ? C.gold : "#141b28",
-                        borderColor: media === key ? C.gold : "#26303f",
+                        color: media === key ? C.onAccent : C.dim,
+                        background: media === key ? C.accent : C.surface,
+                        borderColor: media === key ? C.accent : C.edgeSoft,
                       }}
                     >
                       {label}
@@ -727,9 +1017,9 @@ export default function Editor({ slug }: { slug?: string }) {
                 ...btn,
                 padding: "11px",
                 fontWeight: 600,
-                color: selClue.timerOff ? "#0a0d14" : C.text,
-                background: selClue.timerOff ? C.orange : "#141b28",
-                borderColor: selClue.timerOff ? C.orange : "#2f3a4f",
+                color: selClue.timerOff ? C.onAccent : C.text,
+                background: selClue.timerOff ? C.warn : C.surface,
+                borderColor: selClue.timerOff ? C.warn : C.edge,
               }}
             >
               {selClue.timerOff ? "⏸ NO TIMER ON THIS CLUE" : "⏱ TIMED"}
@@ -759,18 +1049,49 @@ export default function Editor({ slug }: { slug?: string }) {
             )}
 
             {selClue.timerOff && (
-              <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.orange, marginTop: 4, lineHeight: 1.8 }}>
+              <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.warn, marginTop: 4, lineHeight: 1.8 }}>
                 BUZZERS STAY OPEN UNTIL THE HOST CLOSES THE CLUE.
               </div>
             )}
           </Field>
 
+          <Field label="READ DELAY BEFORE BUZZERS OPEN">
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <Synced
+                key={`${selCatId}:${sel.r}:read`}
+                value={selClue.readSeconds === undefined ? "" : String(selClue.readSeconds)}
+                onCommit={(raw) => {
+                  const trimmed = raw.trim();
+                  emit({
+                    type: "clueReadSeconds",
+                    catId: selCatId,
+                    row: sel.r,
+                    // Blank falls back to the board; an explicit 0 does not —
+                    // it is how you say "this one opens immediately" on a board
+                    // whose default is to wait.
+                    value: trimmed === "" ? null : Number(trimmed.replace(/[^0-9]/g, "")) || 0,
+                  });
+                }}
+                placeholder={`${boardReadSeconds} (BOARD DEFAULT)`}
+                style={{ ...input, flex: 1, fontFamily: mono, fontSize: 13 }}
+              />
+              <span style={{ fontFamily: mono, fontSize: 11, color: C.faint }}>SEC</span>
+            </div>
+            <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint, marginTop: 4, lineHeight: 1.8 }}>
+              {selClue.media === "video"
+                ? "SET THIS TO THE CLIP'S LENGTH SO NOBODY BUZZES OVER IT."
+                : "TIME TO READ THE CLUE OUT BEFORE ANYONE CAN RING IN."}
+              <br />
+              THE HOST CAN ALWAYS OPEN THE BUZZERS EARLY.
+            </div>
+          </Field>
+
           <div style={{ display: "flex", gap: 6 }}>
             <button
               onClick={() => {
-                const n = game.categories.length * ROWS;
+                const n = (selRound?.categories.length ?? 1) * ROWS;
                 const i = (sel.c * ROWS + sel.r - 1 + n) % n;
-                setSel({ c: Math.floor(i / ROWS), r: i % ROWS });
+                setSel({ round: roundIndex, c: Math.floor(i / ROWS), r: i % ROWS });
               }}
               style={{ ...btn, flex: 1 }}
             >
@@ -778,15 +1099,15 @@ export default function Editor({ slug }: { slug?: string }) {
             </button>
             <button
               onClick={() => {
-                const n = game.categories.length * ROWS;
+                const n = (selRound?.categories.length ?? 1) * ROWS;
                 const i = (sel.c * ROWS + sel.r + 1) % n;
-                setSel({ c: Math.floor(i / ROWS), r: i % ROWS });
+                setSel({ round: roundIndex, c: Math.floor(i / ROWS), r: i % ROWS });
               }}
               style={{ ...btn, flex: 1 }}
             >
               NEXT ▶
             </button>
-            <button onClick={() => emit({ type: "clueClear", catId: selCatId, row: sel.r })} style={{ ...btn, flex: 1, color: C.orange }}>
+            <button onClick={() => emit({ type: "clueClear", catId: selCatId, row: sel.r })} style={{ ...btn, flex: 1, color: C.warn }}>
               ✕ CLEAR
             </button>
           </div>
@@ -799,7 +1120,7 @@ export default function Editor({ slug }: { slug?: string }) {
               letterSpacing: ".13em",
               color: C.faint,
               lineHeight: 1.9,
-              borderTop: `1px solid #141b26`,
+              borderTop: `1px solid ${C.lineSoft}`,
               paddingTop: 12,
             }}
           >
@@ -807,7 +1128,7 @@ export default function Editor({ slug }: { slug?: string }) {
               <>
                 SAVED CONTINUOUSLY · SHARE THIS PAGE&apos;S URL
                 <br />
-                TO EDIT TOGETHER. LOAD CODE <span style={{ color: C.gold }}>{slug}</span> IN THE HOST CONSOLE.
+                TO EDIT TOGETHER. LOAD CODE <span style={{ color: C.accent }}>{slug}</span> IN THE HOST CONSOLE.
               </>
             ) : (
               <>THIS DRAFT IS ONLY IN THIS BROWSER. SAVE &amp; SHARE TO PUT IT ON THE SERVER AND EDIT IT WITH OTHERS.</>
@@ -874,7 +1195,7 @@ function Synced({
 function Presence({ editors, you, connected }: { editors: EditorPresence[]; you: string; connected: boolean }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-      <span style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".16em", color: connected ? C.green : C.orange }}>
+      <span style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".16em", color: connected ? C.good : C.warn }}>
         {connected ? "● LIVE" : "● OFFLINE"}
       </span>
       <div style={{ display: "flex", gap: 4 }}>
@@ -887,7 +1208,7 @@ function Presence({ editors, you, connected }: { editors: EditorPresence[]; you:
               fontSize: 10,
               letterSpacing: ".1em",
               padding: "3px 7px",
-              color: "#0a0d14",
+              color: C.onAccent,
               background: e.color,
               opacity: e.id === you ? 0.55 : 1,
             }}
@@ -913,7 +1234,7 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".16em", color: "#6b7488" }}>{label}</div>
+      <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".16em", color: C.mutedDeep }}>{label}</div>
       {children}
     </div>
   );
@@ -936,15 +1257,15 @@ const btn: React.CSSProperties = {
   fontFamily: mono,
   fontSize: 11,
   letterSpacing: ".13em",
-  background: "#141b28",
-  border: "1px solid #2f3a4f",
+  background: C.surface,
+  border: `1px solid ${C.edge}`,
 };
 
 const miniBtn: React.CSSProperties = {
   padding: "4px 0",
   fontFamily: mono,
   fontSize: 10,
-  background: "#0f141d",
-  border: "1px solid #222b3a",
-  color: "#8b95ab",
+  background: C.surfaceDeep,
+  border: `1px solid ${C.lineFaint}`,
+  color: C.dim,
 };

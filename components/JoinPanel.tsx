@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { C, mono } from "../lib/theme";
+import { alpha, C, mono } from "../lib/theme";
 
 /**
  * Room code plus a QR pointing at this room's player page.
@@ -40,7 +40,9 @@ export function JoinPanel({
       <div
         style={{
           padding: compact ? 8 : 14,
-          background: "#e8ecf4",
+          // White regardless of theme: this is the code's quiet zone, and the
+          // camera needs it as much as it needs the code itself.
+          background: "#ffffff",
           lineHeight: 0,
           // A quiet zone in the light surround is what makes a code scan from a
           // sofa rather than from arm's length.
@@ -48,7 +50,10 @@ export function JoinPanel({
         }}
       >
         {url ? (
-          <QRCodeSVG value={url} size={size} level="M" bgColor="#e8ecf4" fgColor="#05070c" />
+          // Deliberately not themed. A QR code is read by a camera across a
+          // room, and maximum contrast is what makes that reliable — a theme
+          // that tints it can only make it harder to scan.
+          <QRCodeSVG value={url} size={size} level="M" bgColor="#ffffff" fgColor="#000000" />
         ) : (
           <div style={{ width: size, height: size }} />
         )}
@@ -72,8 +77,8 @@ export function JoinPanel({
             fontWeight: 600,
             letterSpacing: ".14em",
             lineHeight: 1,
-            color: C.gold,
-            textShadow: compact ? "none" : "0 0 60px rgba(240,196,105,.35)",
+            color: C.accent,
+            textShadow: compact ? "none" : `0 0 60px ${alpha(C.accent, 35)}`,
           }}
         >
           {room}

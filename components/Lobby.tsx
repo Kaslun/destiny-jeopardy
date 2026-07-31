@@ -1,8 +1,9 @@
 "use client";
 
 import { JoinPanel } from "./JoinPanel";
-import { C, mono, tintFor } from "../lib/theme";
+import { C, mono, SCENE, tintFor } from "../lib/theme";
 import type { RoomState } from "../shared/protocol";
+import type { Theme } from "../lib/themes";
 
 /**
  * The TV before the game starts: how to get in, and who already has.
@@ -10,9 +11,9 @@ import type { RoomState } from "../shared/protocol";
  * Everything here is sized to be read and scanned from across a room, which is
  * the whole job — a lobby nobody can join from is just a waiting screen.
  */
-export function Lobby({ state, room }: { state: RoomState; room: string }) {
+export function Lobby({ state, room, theme }: { state: RoomState; room: string; theme: Theme }) {
   const players = state.players;
-  const title = state.game?.title ?? "GUARDIAN JEOPARDY";
+  const title = state.game?.title ?? theme.copy.appName;
 
   return (
     <main
@@ -23,7 +24,7 @@ export function Lobby({ state, room }: { state: RoomState; room: string }) {
         flexDirection: "column",
         padding: "clamp(20px,3vw,44px)",
         gap: "clamp(16px,2.5vh,32px)",
-        background: "radial-gradient(120% 90% at 50% -10%, #17203a 0%, #0a0d16 55%, #06080e 100%)",
+        background: SCENE.board,
       }}
     >
       <header style={{ display: "flex", alignItems: "center", gap: 20, flex: "none" }}>
@@ -31,13 +32,13 @@ export function Lobby({ state, room }: { state: RoomState; room: string }) {
           style={{
             width: 44,
             height: 44,
-            border: `2px solid ${C.gold}`,
+            border: `2px solid ${C.accent}`,
             transform: "rotate(45deg)",
             display: "grid",
             placeItems: "center",
           }}
         >
-          <div style={{ width: 15, height: 15, background: C.gold }} />
+          <div style={{ width: 15, height: 15, background: C.accent }} />
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
           <div style={{ fontFamily: mono, fontSize: "clamp(9px,.8vw,13px)", letterSpacing: ".32em", color: C.dim }}>
@@ -68,7 +69,7 @@ export function Lobby({ state, room }: { state: RoomState; room: string }) {
             <div style={{ fontFamily: mono, fontSize: "clamp(10px,.9vw,14px)", letterSpacing: ".3em", color: C.dim }}>
               IN THE ROOM
             </div>
-            <div style={{ fontFamily: mono, fontSize: "clamp(18px,1.8vw,30px)", fontWeight: 600, color: C.cyan }}>
+            <div style={{ fontFamily: mono, fontSize: "clamp(18px,1.8vw,30px)", fontWeight: 600, color: C.info }}>
               {players.length}
             </div>
           </div>
@@ -115,9 +116,9 @@ export function Lobby({ state, room }: { state: RoomState; room: string }) {
                     alignItems: "center",
                     gap: 14,
                     padding: "12px 18px",
-                    background: "linear-gradient(100deg,#111825,#0b0f18)",
+                    background: `linear-gradient(100deg,${C.panel},${C.panelDeep})`,
                     border: `1px solid ${C.line}`,
-                    borderLeft: `4px solid ${tintFor(i)}`,
+                    borderLeft: `4px solid ${tintFor(p.tint ?? i)}`,
                     clipPath: "polygon(0 0,100% 0,100% 74%,97% 100%,0 100%)",
                     opacity: p.connected ? 1 : 0.45,
                     animationDelay: `${Math.min(i, 8) * 45}ms`,
@@ -127,7 +128,7 @@ export function Lobby({ state, room }: { state: RoomState; room: string }) {
                     style={{
                       width: 26,
                       height: 26,
-                      border: `1px solid ${tintFor(i)}`,
+                      border: `1px solid ${tintFor(p.tint ?? i)}`,
                       transform: "rotate(45deg)",
                       opacity: 0.6,
                       flex: "none",
@@ -146,7 +147,7 @@ export function Lobby({ state, room }: { state: RoomState; room: string }) {
                     >
                       {p.name}
                     </div>
-                    <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: "#7d879c" }}>
+                    <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: C.muted }}>
                       {p.connected ? p.cls || "READY" : "AWAY"}
                     </div>
                   </div>

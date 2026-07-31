@@ -2,11 +2,15 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { C, mono, newRoomCode } from "../lib/theme";
+import { C, mono, newRoomCode, SCENE } from "../lib/theme";
+import { useTheme } from "../lib/useTheme";
+import { DEFAULT_THEME_ID } from "../lib/themes";
 
 export default function Landing() {
   const router = useRouter();
   const [code, setCode] = useState("");
+  // The front door belongs to no particular board, so it wears the default.
+  const theme = useTheme(DEFAULT_THEME_ID);
 
   const join = (path: "play" | "tv") => {
     const room = code.trim().toUpperCase();
@@ -23,17 +27,17 @@ export default function Landing() {
         justifyContent: "center",
         gap: 44,
         padding: "48px 24px",
-        background: "radial-gradient(120% 70% at 50% 0%, #17203a, #05070c 70%)",
+        background: SCENE.landing,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-        <div style={{ width: 12, height: 46, background: C.gold, transform: "skewX(-14deg)" }} />
+        <div style={{ width: 12, height: 46, background: C.accent, transform: "skewX(-14deg)" }} />
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".3em", color: C.dim }}>
-            FIRETEAM TRIVIA SYSTEM
+            {theme.copy.tagline}
           </div>
           <h1 style={{ margin: 0, fontSize: 38, fontWeight: 700, letterSpacing: ".04em" }}>
-            GUARDIAN JEOPARDY
+            {theme.copy.appName}
           </h1>
         </div>
       </div>
@@ -47,8 +51,8 @@ export default function Landing() {
             fontSize: 14,
             fontWeight: 600,
             letterSpacing: ".2em",
-            color: "#0a0d14",
-            background: C.gold,
+            color: C.onAccent,
+            background: C.accent,
             border: "none",
           }}
         >
@@ -72,7 +76,7 @@ export default function Landing() {
           value={code}
           onChange={(e) => setCode(e.target.value.toUpperCase())}
           onKeyDown={(e) => e.key === "Enter" && join("play")}
-          placeholder="VEX7"
+          placeholder={theme.copy.codeExample}
           maxLength={6}
           style={{
             padding: "18px",
@@ -81,7 +85,7 @@ export default function Landing() {
             fontWeight: 600,
             letterSpacing: ".22em",
             textAlign: "center",
-            color: C.gold,
+            color: C.accent,
           }}
         />
 
@@ -96,8 +100,8 @@ export default function Landing() {
               fontSize: 12,
               letterSpacing: ".18em",
               fontWeight: 600,
-              color: "#0a0d14",
-              background: C.cyan,
+              color: C.onAccent,
+              background: C.info,
               border: "none",
             }}
           >
@@ -112,7 +116,7 @@ export default function Landing() {
               fontFamily: mono,
               fontSize: 12,
               letterSpacing: ".18em",
-              background: "#141b28",
+              background: C.surface,
               border: `1px solid ${C.line}`,
             }}
           >

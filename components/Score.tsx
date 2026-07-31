@@ -1,6 +1,6 @@
 "use client";
 
-import { money } from "../lib/theme";
+import { C, money } from "../lib/theme";
 import { useAnimatedNumber } from "../lib/useAnimatedNumber";
 
 /**
@@ -11,8 +11,8 @@ import { useAnimatedNumber } from "../lib/useAnimatedNumber";
 export function Score({
   value,
   style,
-  negativeColor = "#f0803c",
-  positiveColor = "#e8ecf4",
+  negativeColor = C.warn,
+  positiveColor = C.text,
 }: {
   value: number;
   style?: React.CSSProperties;

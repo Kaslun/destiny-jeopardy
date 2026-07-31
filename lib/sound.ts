@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { read, write } from "./storage";
 import { SOUND_FILES, SOUND_GAIN } from "./sounds.config";
 
 /**
@@ -18,12 +19,16 @@ import { SOUND_FILES, SOUND_GAIN } from "./sounds.config";
 
 export type Cue =
   | "clueOpen"
+  /** The read delay is up and the room may ring in. */
+  | "buzzersOpen"
   | "buzz"
   | "correct"
   | "wrong"
   | "timeUp"
   | "dailyDouble"
   | "finalThink"
+  /** Ambient bed under the board between clues. */
+  | "boardBed"
   | "reveal"
   | "join"
   | "drumroll"
@@ -80,7 +85,7 @@ async function preloadCue(cue: Cue): Promise<void> {
  * final-round think music has to stop when the round does, not run on over the
  * reveal.
  */
-const SUSTAINED = new Set<Cue>(["finalThink"]);
+const SUSTAINED = new Set<Cue>(["finalThink", "boardBed"]);
 
 /** Whatever is currently sounding for a sustained cue, so it can be faded. */
 const playing = new Map<Cue, { src: AudioBufferSourceNode; gain: GainNode }>();
@@ -109,8 +114,6 @@ export function stopCue(cue: Cue, fadeSeconds = 1.2): void {
 export function preloadSounds(): void {
   for (const cue of files.keys()) void preloadCue(cue);
 }
-
-const MUTE_KEY = "guardian-jeopardy/muted";
 
 let ctx: AudioContext | null = null;
 
@@ -215,6 +218,12 @@ const SYNTH: Record<Cue, (a: AudioContext) => void> = {
   wrong: (a) => {
     tone(a, { freq: 150, from: 220, length: 0.32, gain: 0.22, type: "sawtooth" });
   },
+  // Two rising blips: a starting pistol, not an announcement. It has to cut
+  // through a room mid-sentence and be over before anyone looks up.
+  buzzersOpen: (a) => {
+    tone(a, { freq: 784, length: 0.09, gain: 0.16, type: "square" });
+    tone(a, { freq: 1174.66, start: 0.09, length: 0.13, gain: 0.16, type: "square" });
+  },
   // Falling tone plus a hiss — reads as "that's it" without being harsh.
   timeUp: (a) => {
     tone(a, { freq: 120, from: 420, length: 0.55, gain: 0.24, type: "sawtooth" });
@@ -224,6 +233,24 @@ const SYNTH: Record<Cue, (a: AudioContext) => void> = {
     [523.25, 698.46, 880, 1174.66].forEach((f, i) =>
       tone(a, { freq: f, start: i * 0.075, length: 0.2, gain: 0.15, type: "triangle" }),
     );
+  },
+  /**
+   * The bed under an idle board.
+   *
+   * Deliberately close to nothing: two quiet, detuned low tones and a slow
+   * pulse. A board that plays a *tune* between clues becomes maddening within
+   * ten minutes and the host ends up muting the room — which costs every other
+   * cue as well. This is meant to be noticed only when it stops.
+   *
+   * Best replaced with a real loop via `lib/sounds.config.ts`; the synth is a
+   * placeholder that never needs one.
+   */
+  boardBed: (a) => {
+    for (let i = 0; i < 8; i++) {
+      tone(a, { freq: 55, start: i * 2, length: 2.1, gain: 0.035, type: "sine" });
+      tone(a, { freq: 82.5, start: i * 2, length: 2.1, gain: 0.022, type: "sine" });
+      tone(a, { freq: 110.3, start: i * 2 + 1, length: 1.1, gain: 0.014, type: "triangle" });
+    }
   },
   // A few slow pulses when the final clue appears — a nod, not the real tune.
   finalThink: (a) => {
@@ -327,12 +354,8 @@ export function useSound(enabledByDefault = true): SoundControls {
   }, [ready]);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(MUTE_KEY);
-      if (saved !== null) setMutedState(saved === "1");
-    } catch {
-      /* storage unavailable — the toggle still works for this session */
-    }
+    const saved = read("muted");
+    if (saved !== null) setMutedState(saved === "1");
   }, []);
 
   // Any interaction is enough to satisfy the browser's autoplay rules.
@@ -348,11 +371,7 @@ export function useSound(enabledByDefault = true): SoundControls {
 
   const setMuted = useCallback((next: boolean) => {
     setMutedState(next);
-    try {
-      localStorage.setItem(MUTE_KEY, next ? "1" : "0");
-    } catch {
-      /* not fatal */
-    }
+    write("muted", next ? "1" : "0");
     if (!next) unlockAudio();
   }, []);
 

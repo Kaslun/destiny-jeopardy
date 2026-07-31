@@ -1,6 +1,6 @@
 "use client";
 
-import { C, mono } from "../lib/theme";
+import { alpha, C, mono } from "../lib/theme";
 
 /**
  * Prompt to switch the room's audio on.
@@ -23,8 +23,8 @@ export function SoundGate({ onEnable, onMute }: { onEnable: () => void; onMute: 
         alignItems: "center",
         gap: 12,
         padding: "12px 14px 12px 20px",
-        background: "rgba(10,13,20,.94)",
-        border: `1px solid ${C.gold}`,
+        background: alpha(C.panel, 94),
+        border: `1px solid ${C.accent}`,
         boxShadow: "0 18px 50px rgba(0,0,0,.6)",
         animation: "riseFade .4s var(--snap) both",
       }}
@@ -41,8 +41,8 @@ export function SoundGate({ onEnable, onMute }: { onEnable: () => void; onMute: 
           fontSize: "clamp(11px,1vw,14px)",
           letterSpacing: ".2em",
           fontWeight: 600,
-          color: "#0a0d14",
-          background: C.gold,
+          color: C.onAccent,
+          background: C.accent,
           border: "none",
         }}
       >

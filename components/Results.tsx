@@ -1,9 +1,12 @@
 "use client";
 
-import { C, mono, money, tintFor } from "../lib/theme";
+import { alpha, C, mono, money, SCENE, tintFor } from "../lib/theme";
 import { standings, type RoomState } from "../shared/protocol";
+import type { Theme } from "../lib/themes";
 
-const MEDAL = ["#f0c469", "#c9d2e2", "#c98a4b"];
+/* Gold, silver, bronze. Third place is a literal because bronze is a medal, not
+   a role — no theme has an opinion about it and none should. */
+const MEDAL = [C.accent, C.text, "#c98a4b"];
 
 /**
  * The closing standings, revealed one place at a time.
@@ -13,7 +16,7 @@ const MEDAL = ["#f0c469", "#c9d2e2", "#c98a4b"];
  * how much is still unclaimed, which is where the tension comes from — a
  * scoreboard that simply appeared would carry none of it.
  */
-export function Results({ state }: { state: RoomState }) {
+export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
   const results = state.results!;
   const byId = new Map(state.players.map((p) => [p.id, p]));
   const ranked = standings(state.players); // best first
@@ -36,9 +39,7 @@ export function Results({ state }: { state: RoomState }) {
         alignItems: "center",
         padding: "clamp(18px,3vh,40px) clamp(20px,4vw,60px)",
         gap: "clamp(12px,2vh,26px)",
-        background: winnerOut
-          ? "radial-gradient(120% 80% at 50% 8%, #3a2c08 0%, #0d0a06 58%, #06070c 100%)"
-          : "radial-gradient(120% 90% at 50% -10%, #17203a 0%, #0a0d16 55%, #06080e 100%)",
+        background: winnerOut ? SCENE.winner : SCENE.results,
         transition: "background 1.2s var(--snap)",
       }}
     >
@@ -54,8 +55,7 @@ export function Results({ state }: { state: RoomState }) {
             height: "160vh",
             marginLeft: "-80vh",
             pointerEvents: "none",
-            background:
-              "repeating-conic-gradient(from 0deg at 50% 50%, rgba(240,196,105,.16) 0deg 7deg, transparent 7deg 20deg)",
+            background: `repeating-conic-gradient(from 0deg at 50% 50%, ${alpha(C.accent, 16)} 0deg 7deg, transparent 7deg 20deg)`,
           }}
         />
       )}
@@ -70,11 +70,11 @@ export function Results({ state }: { state: RoomState }) {
             fontWeight: 700,
             letterSpacing: ".05em",
             lineHeight: 1,
-            color: allOut ? C.gold : C.text,
+            color: allOut ? C.accent : C.text,
             transition: "color .8s var(--snap)",
           }}
         >
-          {state.game?.title ?? "GUARDIAN JEOPARDY"}
+          {state.game?.title ?? theme.copy.appName}
         </div>
       </div>
 
@@ -108,9 +108,9 @@ export function Results({ state }: { state: RoomState }) {
                   alignItems: "center",
                   gap: "clamp(14px,2vw,32px)",
                   padding: "clamp(16px,2.4vh,30px) clamp(18px,2.5vw,36px)",
-                  background: "linear-gradient(100deg, rgba(240,196,105,.22), rgba(240,196,105,.06))",
-                  border: `2px solid ${C.gold}`,
-                  boxShadow: "0 0 70px rgba(240,196,105,.35)",
+                  background: `linear-gradient(100deg, ${alpha(C.accent, 22)}, ${alpha(C.accent, 6)})`,
+                  border: `2px solid ${C.accent}`,
+                  boxShadow: `0 0 70px ${alpha(C.accent, 35)}`,
                 }}
               >
                 <div
@@ -118,7 +118,7 @@ export function Results({ state }: { state: RoomState }) {
                     fontFamily: mono,
                     fontSize: "clamp(26px,4vw,72px)",
                     fontWeight: 600,
-                    color: C.gold,
+                    color: C.accent,
                     width: "2.2ch",
                     textAlign: "center",
                   }}
@@ -139,7 +139,7 @@ export function Results({ state }: { state: RoomState }) {
                   >
                     {player?.name ?? "—"}
                   </div>
-                  <div style={{ fontFamily: mono, fontSize: "clamp(10px,1vw,16px)", letterSpacing: ".3em", color: C.gold }}>
+                  <div style={{ fontFamily: mono, fontSize: "clamp(10px,1vw,16px)", letterSpacing: ".3em", color: C.accent }}>
                     WINNER
                   </div>
                 </div>
@@ -148,7 +148,7 @@ export function Results({ state }: { state: RoomState }) {
                     fontFamily: mono,
                     fontSize: "clamp(22px,3.2vw,58px)",
                     fontWeight: 600,
-                    color: C.gold,
+                    color: C.accent,
                     fontVariantNumeric: "tabular-nums",
                   }}
                 >
@@ -190,7 +190,7 @@ export function Results({ state }: { state: RoomState }) {
                   fontFamily: mono,
                   fontSize: "clamp(16px,2.2vw,38px)",
                   fontWeight: 600,
-                  color: out ? medal : "#2f3a4f",
+                  color: out ? medal : C.edge,
                   width: "2.2ch",
                   textAlign: "center",
                 }}
@@ -207,7 +207,7 @@ export function Results({ state }: { state: RoomState }) {
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
-                  color: out ? C.text : "#2f3a4f",
+                  color: out ? C.text : C.edge,
                 }}
               >
                 {out ? (player?.name ?? "—") : "• • • • •"}
@@ -218,7 +218,7 @@ export function Results({ state }: { state: RoomState }) {
                   fontSize: "clamp(14px,1.9vw,32px)",
                   fontWeight: 600,
                   fontVariantNumeric: "tabular-nums",
-                  color: out ? (entry.score < 0 ? C.orange : C.text) : "#2f3a4f",
+                  color: out ? (entry.score < 0 ? C.warn : C.text) : C.edge,
                 }}
               >
                 {out ? money(entry.score) : "—"}
@@ -236,7 +236,7 @@ export function Results({ state }: { state: RoomState }) {
           fontFamily: mono,
           fontSize: "clamp(10px,1vw,15px)",
           letterSpacing: ".3em",
-          color: allOut ? C.gold : C.faint,
+          color: allOut ? C.accent : C.faint,
           textAlign: "center",
         }}
       >
