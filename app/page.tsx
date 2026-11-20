@@ -1,21 +1,25 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { C, mono, newRoomCode, SCENE } from "../lib/theme";
+import { useEffect, useState } from "react";
+import { C, newRoomCode } from "../lib/theme";
 import { useTheme } from "../lib/useTheme";
 import { DEFAULT_THEME_ID } from "../lib/themes";
+import { myBoards, type BoardRef } from "../lib/boards";
+import { Icon, Mark } from "../components/ui";
 
 export default function Landing() {
   const router = useRouter();
   const [code, setCode] = useState("");
+  const [boards, setBoards] = useState<BoardRef[]>([]);
   // The front door belongs to no particular board, so it wears the default.
   const theme = useTheme(DEFAULT_THEME_ID);
 
-  const join = (path: "play" | "tv") => {
-    const room = code.trim().toUpperCase();
-    if (room.length >= 3) router.push(`/${path}/${room}`);
-  };
+  useEffect(() => setBoards(myBoards()), []);
+
+  const room = code.trim().toUpperCase();
+  const ready = room.length >= 3;
+  const go = (path: "play" | "tv") => ready && router.push(`/${path}/${room}`);
 
   return (
     <main
@@ -24,121 +28,129 @@ export default function Landing() {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        justifyContent: "center",
-        gap: 44,
-        padding: "48px 24px",
-        background: SCENE.landing,
+        padding: "clamp(40px,10vh,96px) 16px 48px",
+        gap: 40,
+        background: "var(--scene-landing)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-        <div style={{ width: 12, height: 46, background: C.accent, transform: "skewX(-14deg)" }} />
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".3em", color: C.dim }}>
-            {theme.copy.tagline}
+      <header style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center" }}>
+        <Mark size={56} />
+        <h1 className="display" style={{ margin: 0, fontSize: "clamp(36px,7vw,56px)" }}>
+          {theme.copy.appName}
+        </h1>
+        <p style={{ margin: 0, color: C.dim, fontSize: 16 }}>{theme.copy.tagline}</p>
+      </header>
+
+      <div style={{ width: "100%", maxWidth: 440, display: "flex", flexDirection: "column", gap: 14 }}>
+        <form
+          className="card"
+          style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            go("play");
+          }}
+        >
+          <label htmlFor="room" style={{ fontSize: 14, fontWeight: 600, color: C.dim }}>
+            Join a game
+          </label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              id="room"
+              className="input input-lg mono"
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
+              placeholder="Room code"
+              maxLength={6}
+              autoComplete="off"
+              autoCapitalize="characters"
+              spellCheck={false}
+              style={{ fontSize: 22, fontWeight: 600, letterSpacing: ".18em", textAlign: "center" }}
+            />
+            <button type="submit" className="btn btn-primary btn-lg" disabled={!ready} aria-label="Join">
+              Join <Icon name="arrowRight" />
+            </button>
           </div>
-          <h1 style={{ margin: 0, fontSize: 38, fontWeight: 700, letterSpacing: ".04em" }}>
-            {theme.copy.appName}
-          </h1>
+          {ready && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => go("tv")} style={{ alignSelf: "center" }}>
+              <Icon name="tv" size={16} /> Open as the TV screen instead
+            </button>
+          )}
+        </form>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <Tile icon="play" title="Host a game" onClick={() => router.push(`/host/${newRoomCode()}`)} />
+          <Tile icon="edit" title="Create a quiz" onClick={() => router.push("/edit")} />
         </div>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 14, width: "100%", maxWidth: 380 }}>
-        <button
-          onClick={() => router.push(`/host/${newRoomCode()}`)}
-          style={{
-            padding: "20px",
-            fontFamily: mono,
-            fontSize: 14,
-            fontWeight: 600,
-            letterSpacing: ".2em",
-            color: C.onAccent,
-            background: C.accent,
-            border: "none",
-          }}
-        >
-          ◆ HOST A NEW GAME
-        </button>
+      {boards.length > 0 && (
+        <section style={{ width: "100%", maxWidth: 440, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="eyebrow">Your quizzes</div>
+          <div className="card" style={{ overflow: "hidden" }}>
+            {boards.slice(0, 8).map((b, i) => (
+              <div
+                key={b.slug}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "10px 10px 10px 16px",
+                  borderTop: i ? `1px solid ${C.lineSoft}` : "none",
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="truncate" style={{ fontWeight: 600 }}>
+                    {b.title || "Untitled quiz"}
+                  </div>
+                  <div className="mono" style={{ fontSize: 12, color: C.muted }}>
+                    {b.slug}
+                  </div>
+                </div>
+                <a className="btn btn-ghost btn-sm" href={`/edit/${b.slug}`}>
+                  Edit
+                </a>
+                <button className="btn btn-sm" onClick={() => router.push(`/host/${newRoomCode()}?board=${b.slug}`)}>
+                  <Icon name="play" size={12} /> Host
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </main>
+  );
+}
 
-        <div
-          style={{
-            fontFamily: mono,
-            fontSize: 11,
-            letterSpacing: ".24em",
-            color: C.faint,
-            textAlign: "center",
-            padding: "10px 0 2px",
-          }}
-        >
-          OR ENTER A ROOM CODE
-        </div>
-
-        <input
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-          onKeyDown={(e) => e.key === "Enter" && join("play")}
-          placeholder={theme.copy.codeExample}
-          maxLength={6}
-          style={{
-            padding: "18px",
-            fontFamily: mono,
-            fontSize: 30,
-            fontWeight: 600,
-            letterSpacing: ".22em",
-            textAlign: "center",
-            color: C.accent,
-          }}
-        />
-
-        <div style={{ display: "flex", gap: 10 }}>
-          <button
-            onClick={() => join("play")}
-            disabled={code.trim().length < 3}
-            style={{
-              flex: 2,
-              padding: "16px",
-              fontFamily: mono,
-              fontSize: 12,
-              letterSpacing: ".18em",
-              fontWeight: 600,
-              color: C.onAccent,
-              background: C.info,
-              border: "none",
-            }}
-          >
-            JOIN AS PLAYER
-          </button>
-          <button
-            onClick={() => join("tv")}
-            disabled={code.trim().length < 3}
-            style={{
-              flex: 1,
-              padding: "16px",
-              fontFamily: mono,
-              fontSize: 12,
-              letterSpacing: ".18em",
-              background: C.surface,
-              border: `1px solid ${C.line}`,
-            }}
-          >
-            OPEN TV
-          </button>
-        </div>
-      </div>
-
-      <div
+function Tile({ icon, title, onClick }: { icon: "play" | "edit"; title: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="card lift tap"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "16px",
+        textAlign: "left",
+        fontSize: 15,
+        fontWeight: 600,
+      }}
+    >
+      <span
         style={{
-          fontFamily: mono,
-          fontSize: 11,
-          letterSpacing: ".16em",
-          color: C.faint,
-          textAlign: "center",
-          lineHeight: 2,
+          width: 36,
+          height: 36,
+          flex: "none",
+          display: "grid",
+          placeItems: "center",
+          borderRadius: "var(--r-md)",
+          background: `color-mix(in srgb, ${C.accent} 16%, transparent)`,
+          color: C.accent,
         }}
       >
-        BUILD A BOARD IN THE <a href="/edit">EDITOR</a>, SAVE IT FOR A CODE,
-        <br />
-        THEN LOAD THAT CODE FROM THE HOST CONSOLE.
-      </div>
-    </main>
+        <Icon name={icon} size={icon === "play" ? 14 : 18} />
+      </span>
+      {title}
+    </button>
   );
 }

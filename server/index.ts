@@ -615,7 +615,8 @@ export class JeopardyRoom extends Server<Env> {
       entry.wager = Math.max(min, Math.min(max, wager));
       entry.locked = true;
     } else if (msg.type === "setFinalResponse") {
-      if (final.phase !== "clue" || final.writingClosed) return;
+      // A locked-in answer is final; it is what "everyone is done" counts.
+      if (final.phase !== "clue" || final.writingClosed || entry.locked) return;
       // Late writing is refused on the room's own clock, checked on arrival, so
       // there is no window where an answer slips in after time.
       if (s.timed && s.openedAt !== null && Date.now() - s.openedAt > s.timerSeconds * 1000) {
@@ -624,16 +625,18 @@ export class JeopardyRoom extends Server<Env> {
         return;
       }
       entry.response = String(msg.response).slice(0, 200);
-
-      // Everyone has written something: stop the clock early rather than
-      // making the room sit through the rest of the music.
-      if (final.order.every((id) => final.entries[id].response.trim() !== "")) {
-        final.writingClosed = true;
-      }
     } else {
       // lockFinal: commit whichever stage the player is in.
       if (final.phase === "wager" && entry.wager === null) entry.wager = 0;
+      if (final.phase === "clue" && final.writingClosed) return;
       entry.locked = true;
+      // Everyone has locked in an answer: stop the clock early rather than
+      // making the room sit through the rest of the music. This used to fire
+      // when everyone had typed *anything*, which closed the round on the
+      // last player's first keystroke.
+      if (final.phase === "clue" && final.order.every((id) => final.entries[id].locked)) {
+        final.writingClosed = true;
+      }
     }
     this.#commit();
   }

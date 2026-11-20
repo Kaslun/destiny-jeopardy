@@ -7,7 +7,7 @@ const base = themeById(DEFAULT_THEME_ID);
 
 export const metadata: Metadata = {
   title: base.copy.appName,
-  description: "A buzzer trivia game for a room full of people and their phones.",
+  description: "A buzzer quiz for a room full of people and their phones.",
 };
 
 export const viewport: Viewport = {
@@ -22,15 +22,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-        {/* Every shipped theme's typefaces in one request. There are few enough
-            that fetching them all beats a flash of fallback type when a board
-            turns out to use a theme whose face was not loaded up front. */}
+        {/* The UI face, the code face and the default display face. Any other
+            display face a board picks is requested on demand by `useTheme`. */}
         <link
-          href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Oswald:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&family=Oswald:wght@500;600;700&display=swap"
           rel="stylesheet"
         />
-        {/* The base palette, so the first paint is never unstyled. Each surface
-            re-emits its board's theme further down the document, which wins. */}
         <ThemeStyle theme={base} />
       </head>
       <body>{children}</body>

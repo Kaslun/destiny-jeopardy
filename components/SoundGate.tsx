@@ -1,18 +1,17 @@
 "use client";
 
-import { alpha, C, mono } from "../lib/theme";
+import { C } from "../lib/theme";
+import { Icon } from "./ui";
 
 /**
- * Prompt to switch the room's audio on.
- *
- * Browsers will not start audio until someone interacts with the page, and a TV
- * is the one screen nobody ever touches — so without this every cue is silently
- * dropped and the game just seems to have no sound. Shown until audio is
- * genuinely running, then gone for good.
+ * Prompt to switch the room's audio on. Browsers will not start audio until
+ * someone interacts with the page, and the TV is the one screen nobody
+ * touches — so without this every cue is silently dropped.
  */
 export function SoundGate({ onEnable, onMute }: { onEnable: () => void; onMute: () => void }) {
   return (
     <div
+      className="float"
       style={{
         position: "fixed",
         left: "50%",
@@ -21,47 +20,16 @@ export function SoundGate({ onEnable, onMute }: { onEnable: () => void; onMute: 
         zIndex: 50,
         display: "flex",
         alignItems: "center",
-        gap: 12,
-        padding: "12px 14px 12px 20px",
-        background: alpha(C.panel, 94),
-        border: `1px solid ${C.accent}`,
-        boxShadow: "0 18px 50px rgba(0,0,0,.6)",
+        gap: 8,
+        padding: 8,
         animation: "riseFade .4s var(--snap) both",
       }}
     >
-      <button
-        onClick={onEnable}
-        className="tap"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "10px 18px",
-          fontFamily: mono,
-          fontSize: "clamp(11px,1vw,14px)",
-          letterSpacing: ".2em",
-          fontWeight: 600,
-          color: C.onAccent,
-          background: C.accent,
-          border: "none",
-        }}
-      >
-        🔊 TURN ON SOUND
+      <button onClick={onEnable} className="btn btn-primary btn-lg">
+        <Icon name="volume" /> Turn on sound
       </button>
-      <button
-        onClick={onMute}
-        className="tap"
-        style={{
-          padding: "10px 14px",
-          fontFamily: mono,
-          fontSize: "clamp(9px,.85vw,12px)",
-          letterSpacing: ".16em",
-          color: C.faint,
-          background: "transparent",
-          border: `1px solid ${C.line}`,
-        }}
-      >
-        PLAY SILENT
+      <button onClick={onMute} className="btn btn-ghost btn-lg" style={{ color: C.muted }}>
+        Play silent
       </button>
     </div>
   );

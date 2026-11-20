@@ -44,8 +44,10 @@ design/         the original design doc + board editor
 
 ## Authoring a game
 
-Build a board at **`/edit`** and hit **Save & share**. You get a short **board
-code**; type that into the host console and the game loads. Boards live on the
+**Create a quiz** (`/edit`) makes a saved board straight away and moves you to
+`/edit/CODE` — there is no separate publish step, so uploads and sharing work
+from the first second. Press **Play** in the editor to host it, or pick it from
+**Your quizzes** on the home page or in the host console. Boards live on the
 server (one Durable Object per code), so a code is all anyone needs.
 
 **`/edit/[code]` is collaborative.** Send someone the URL and you edit the same
@@ -54,11 +56,11 @@ each person is looking at is ringed in their colour, and the inspector warns you
 when someone else is in the clue you just opened. There is no save button — the
 server owns the document and every change is persisted as it happens.
 
-`/edit` with no code is a private local draft in `localStorage`. It only reaches
-the server, and becomes collaborative, when you save it. The editor also keeps a
+If the room server cannot be reached, `/edit` falls back to a local draft in
+`localStorage` with a **Save** button that retries. The editor also keeps a
 local list of codes you created; there is no cross-object listing on the server,
 so losing that list loses the index, not the boards. Import/export as JSON still
-works in both modes.
+works from the editor's Settings panel (Export / Import).
 
 ### How concurrent edits are resolved
 
@@ -84,44 +86,45 @@ one wired to the game.
 
 ## Themes
 
-A theme is a palette, a pair of typefaces, and the words the game uses about
-itself. They live in `lib/themes.ts`; three ship today:
+A theme is a palette, a display typeface, a corner style and the words the game
+uses about itself. Six presets ship in `lib/themes.ts`: **Classic** (the
+default), **Guardian** (the original design), **Midnight**, **Neon**, **Sunset**
+and **Daylight** (a light theme).
 
-| Theme | Looks like |
-| --- | --- |
-| **Classic** | Royal blue and gold, the way the show does it. The default. |
-| **Guardian** | The original design: deep navy, gold, sci-fi fireteam flavour. |
-| **Midnight** | Slate and teal. Understated, no flavour of its own. |
+### Making a quiz your own
 
-The theme belongs to the **board**, picked in the editor, so the TV, host console
-and every phone in the room agree without anyone configuring anything.
+Every quiz has a **Style** button in the editor's header. It opens a panel with
+a live preview where the author picks a preset, then optionally an accent
+colour, a background colour, a typeface, a corner style (sharp, cut, soft,
+round), capital headings on or off, and a logo (an emoji or up to three
+letters). The editor wears the result as you go, so what you see is what the
+room sees.
 
-Colours and typefaces are **CSS custom properties**. `lib/theme.ts` exports `C`,
-whose members are strings like `"var(--c-accent)"` rather than colours, so every
-inline style in the app reads normally but resolves at paint time against
-whichever theme is mounted. Switching a theme rewrites one `<style>` block —
-nothing re-renders, and no component has to know themes exist.
+Those choices are stored on the board as `game.style` — a small object of
+overrides validated by `parseStyle` in `shared/protocol.ts` — and folded into
+the preset by `resolveTheme`. The TV, the host console and every phone pick it
+up from the board; nobody configures anything.
 
-Tokens are named for their **role**, never their colour: `accent`, `warn`,
-`special`, `good`. A token called `gold` would be a lie in every theme but one,
-and the lie spreads — the next person reads `C.gold` and reaches for gold.
+### Adding a preset
 
-`useTheme(id)` mounts a theme and hands back its `copy` and `classes`. It applies
-the palette as a side effect on `document.head` rather than as rendered markup,
-because the TV returns from half a dozen branches depending on what the room is
-doing and a rendered `<ThemeStyle>` is easy to forget in the branch nobody tested.
+Write a `ThemeSpec` and add it to `PRESETS` in `lib/themes.ts`. Only `bg` and
+`accent` are required: every surface, border, text shade, page background and
+seat colour is derived from those two, for dark and light backgrounds alike.
+Pin anything the derivation gets wrong with `colors` or `scenes`; set the
+typeface with `font` (an id from `FONTS`), and the player-facing words with
+`copy`. Typefaces other than Inter, IBM Plex Mono and Oswald are fetched from
+Google Fonts on demand, so a new face is one entry in `FONTS`.
+
+Colours are **CSS custom properties**. `lib/theme.ts` exports `C`, whose
+members are strings like `"var(--c-accent)"`, so inline styles resolve at paint
+time against whichever theme is mounted. Tokens are named for their **role**,
+never their colour: `accent`, `warn`, `special`, `good`. Shared component
+styles (`btn`, `input`, `seg`, `card`, `chip`…) live in `app/globals.css`, and
+the behavioural pieces (toasts, menus, drawers, confirm buttons, icons) in
+`components/ui.tsx`.
 
 Boards saved **before themes existed** have no `theme` field and render as
-Guardian, so nothing anyone already built changes appearance. Only new boards
-take the neutral default.
-
-### Adding one
-
-Add a `Theme` to `lib/themes.ts` and list it in `THEMES`. Every token is
-required — there is no partial theme and no inheritance, because a theme that
-falls back to another theme's colours for the tokens it forgot looks broken in
-exactly the places nobody checked. If the theme brings a new typeface, add it to
-the font link in `app/layout.tsx`.
+Guardian, so nothing anyone already built changes appearance.
 
 ## Local development
 
@@ -183,6 +186,9 @@ npx vercel --prod
   has nothing to wager and sits it out. Everyone eligible wagers blind knowing
   only the category; the clue stays hidden on the TV and on phones until every
   wager is in. Reveal order is lowest score first, so the leader lands last.
+- **Final answers are saved as you type and closed by "Lock in".** Writing ends
+  early only once every player has locked in — not when everyone has typed
+  something, which used to close the round on the last player's first letter.
 - **Board routes need CORS** (`/boards/:slug`), since the app is served from a
   different origin than the Worker. The WebSocket upgrade does not.
 - **`BoardStore` serves both protocols.** WebSockets at

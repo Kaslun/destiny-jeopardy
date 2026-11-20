@@ -2,101 +2,124 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { alpha, C, mono, newRoomCode } from "../lib/theme";
+import { alpha, C, newRoomCode } from "../lib/theme";
 import { keyFor, linkWithKey } from "../lib/keys";
-import { loadBoard, myBoards, rememberBoard, saveBoard, type BoardRef } from "../lib/boards";
+import { myBoards, rememberBoard, saveBoard } from "../lib/boards";
 import { storeEditorName, storedEditorName, useBoard } from "../lib/useBoard";
 import { readJson, writeJson } from "../lib/storage";
 import { useTheme } from "../lib/useTheme";
-import { DEFAULT_THEME_ID, THEMES } from "../lib/themes";
+import { DEFAULT_THEME_ID } from "../lib/themes";
 import { mediaLimitLabel, storageUsage, uploadMedia } from "../lib/media";
 import { ClueMedia } from "./ClueMedia";
+import { StylePanel } from "./StylePanel";
+import {
+  ConfirmButton,
+  copyText,
+  Drawer,
+  Field,
+  Icon,
+  LiveDot,
+  Mark,
+  Popover,
+  Splash,
+  SwitchRow,
+  useToast,
+  type IconName,
+} from "./ui";
 import {
   applyBoardOp,
   DEFAULT_CLUE_SECONDS,
   DEFAULT_READ_SECONDS,
+  formatBytes,
   MAX_CATS,
   MAX_ROUNDS,
   MIN_CATS,
   newSlug,
   parseGame,
-  formatBytes,
   ROWS,
   youTubeId,
   type BoardOp,
-  type StorageUsage,
   type Clue,
   type EditorPresence,
+  type FinalClue,
   type Game,
+  type Media,
+  type StorageUsage,
 } from "../shared/protocol";
 
 function blankGame(): Game {
   return parseGame({
-    title: "MY JEOPARDY GAME",
-    subtitle: "ROUND 01",
-    values: [200, 400, 600, 800, 1000],
-    categories: [{ name: "CATEGORY ONE" }, { name: "CATEGORY TWO" }, { name: "CATEGORY THREE" }],
+    title: "My quiz",
+    subtitle: "",
+    rounds: [
+      {
+        name: "Round 1",
+        values: [200, 400, 600, 800, 1000],
+        categories: [{ name: "Category 1" }, { name: "Category 2" }, { name: "Category 3" }, { name: "Category 4" }],
+      },
+    ],
     final: { category: "", t: "", a: "" },
     theme: DEFAULT_THEME_ID,
   })!;
 }
 
-/**
- * Whether a clue is finished enough to play.
- *
- * The answer is the one thing every clue needs — without it the host has
- * nothing to rule against. The *question* can be an image or a video instead of
- * text: "what is this?" over a photograph is a complete clue, and requiring
- * words as well marked a whole board of picture rounds as unfinished.
- */
-const isReady = (q: Clue) => !!(q.a.trim() && (q.t.trim() || q.media));
-
-/** Started but not finished — worth flagging amber rather than empty. */
+/** Playable: an answer, plus either words or something to look at. */
+const isReady = (q: { t: string; a: string; media?: Media }) => !!(q.a.trim() && (q.t.trim() || q.media));
 const isStarted = (q: Clue) => !isReady(q) && !!(q.t.trim() || q.a.trim() || q.media);
-const trunc = (s: string, n: number) => {
-  const t = s.trim().replace(/\s+/g, " ");
-  return t.length > n ? t.slice(0, n - 1) + "…" : t;
-};
+
+const MEDIA_ICON: Record<Media, IconName> = { image: "image", video: "video", audio: "music", youtube: "youtube" };
+
+type Tab = number | "final";
 
 export default function Editor({ slug }: { slug?: string }) {
   const router = useRouter();
-  const [name, setName] = useState("EDITOR");
+  const [toast, notify] = useToast();
+  const [name, setName] = useState("Guest");
   const [draft, setDraft] = useState<Game | null>(null);
-  /** Which round is being edited, and the cell selected within it. */
-  const [sel, setSel] = useState({ round: 0, c: 0, r: 0 });
-  const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [ioOpen, setIoOpen] = useState(false);
-  const [ioText, setIoText] = useState("");
-  const [boards, setBoards] = useState<BoardRef[]>([]);
-  const [armed, setArmed] = useState("");
+  const [tab, setTab] = useState<Tab>(0);
+  const [sel, setSel] = useState({ c: 0, r: 0 });
+  const [styleOpen, setStyleOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
-  /** The YouTube URL being pasted for the selected clue. */
-  const [youtube, setYoutube] = useState("");
-  /** How much of the storage budget this board is using. Null until known. */
   const [usage, setUsage] = useState<StorageUsage | null>(null);
+  /** Only true when creating the board on the server failed. */
+  const [offline, setOffline] = useState(false);
+  const clueRef = useRef<HTMLTextAreaElement>(null);
 
   const live = useBoard(slug ?? null, name);
   const collaborative = !!slug;
 
-  useEffect(() => {
-    setBoards(myBoards());
-    setName(storedEditorName() || "EDITOR");
-  }, []);
+  useEffect(() => setName(storedEditorName() || "Guest"), []);
 
-  // Only a saved board occupies storage — a local draft has nowhere to put a
-  // file yet, so there is nothing to report.
   useEffect(() => {
     if (slug) void storageUsage(slug).then(setUsage);
   }, [slug]);
 
-  // Offline drafts only: restore whatever was last being worked on.
+  /**
+   * `/edit` with no code makes a real, saved board straight away and moves to
+   * it. There is no "draft, then publish" step to understand: the quiz exists,
+   * has a code, can take uploads and be shared from the first second. Only if
+   * the server cannot be reached does it fall back to a local draft.
+   */
+  const creating = useRef(false);
   useEffect(() => {
-    if (collaborative) return;
+    if (slug || creating.current) return;
+    creating.current = true;
     const saved = readJson<unknown>("draft");
-    setDraft((saved ? parseGame(saved) : null) ?? blankGame());
-  }, [collaborative]);
+    const start = (saved ? parseGame(saved) : null) ?? blankGame();
+    const target = newSlug();
+    saveBoard(target, start)
+      .then(() => {
+        rememberBoard({ slug: target, title: start.title, savedAt: Date.now() });
+        writeJson("draft", null);
+        router.replace(`/edit/${target}`);
+      })
+      .catch(() => {
+        setDraft(start);
+        setOffline(true);
+      });
+  }, [slug, router]);
 
   const game = collaborative ? live.game : draft;
 
@@ -106,48 +129,45 @@ export default function Editor({ slug }: { slug?: string }) {
     return () => clearTimeout(id);
   }, [draft, collaborative]);
 
-  // The editor wears the board it is editing, so the theme picker previews
-  // itself and every colour on this screen is the one the room will see.
-  const theme = useTheme(game?.theme);
+  // Keep the local index's title fresh, so "Your quizzes" reads right.
+  const title = game?.title;
+  useEffect(() => {
+    if (!slug || title === undefined) return;
+    const known = myBoards().find((b) => b.slug === slug);
+    if (live.canEdit && (!known || known.title !== title)) rememberBoard({ slug, title, savedAt: Date.now() });
+  }, [slug, title, live.canEdit]);
 
-  /**
-   * Every mutation in this editor is an operation. Collaborative boards send it
-   * to the server; local drafts apply the same reducer in memory. One code path,
-   * so the two modes cannot drift.
-   */
+  // The editor wears the board it is editing: every colour here is the room's.
+  const theme = useTheme(game ? game.theme : DEFAULT_THEME_ID, game?.style);
+
   const emit = useCallback(
     (op: BoardOp) => {
-      setArmed("");
       if (collaborative) live.send(op);
       else setDraft((g) => (g ? applyBoardOp(g, op) : g));
     },
     [collaborative, live],
   );
 
-  // Clamped rather than trusted: a collaborator can delete the round you are
-  // looking at, and an index pointing past the end would blank the editor.
-  const roundIndex = game ? Math.min(sel.round, game.rounds.length - 1) : 0;
-  const selRound = game?.rounds[roundIndex] ?? null;
-  const selCat = selRound?.categories[sel.c] ?? null;
-  const selCatId = selCat?.id ?? "";
+  // Clamped: a collaborator can delete the round you are looking at.
+  const roundIndex = game && tab !== "final" ? Math.min(tab, game.rounds.length - 1) : 0;
+  const round = game?.rounds[roundIndex] ?? null;
+  const cat = round?.categories[Math.min(sel.c, round.categories.length - 1)] ?? null;
+  const catId = cat?.id ?? "";
 
-  // Tell the others which cell you're in, so they can steer clear of it.
   useEffect(() => {
-    if (!collaborative || !selCatId) return;
-    live.setFocus({ catId: selCatId, row: sel.r });
-  }, [collaborative, selCatId, sel.r, live]);
+    if (!collaborative || !catId || tab === "final") return;
+    live.setFocus({ catId, row: sel.r });
+  }, [collaborative, catId, sel.r, live, tab]);
 
-  // Counted across every round: the progress bar is about the whole game being
-  // ready to play, and a round-local count would read 100% with round two blank.
   const stats = useMemo(() => {
-    if (!game) return { ready: 0, total: 0, pct: 0 };
+    if (!game) return { ready: 0, total: 0 };
     let total = 0;
     let ready = 0;
-    for (const round of game.rounds) {
-      total += round.categories.length * ROWS;
-      for (const cat of round.categories) for (const q of cat.clues) if (isReady(q)) ready++;
+    for (const r of game.rounds) {
+      total += r.categories.length * ROWS;
+      for (const c of r.categories) for (const q of c.clues) if (isReady(q)) ready++;
     }
-    return { ready, total, pct: total ? Math.round((ready / total) * 100) : 0 };
+    return { ready, total };
   }, [game]);
 
   const others = live.editors.filter((e) => e.id !== live.you);
@@ -161,1007 +181,486 @@ export default function Editor({ slug }: { slug?: string }) {
     return map;
   }, [others]);
 
+  // Arrow keys walk the grid whenever you are not typing.
+  useEffect(() => {
+    if (tab === "final" || !round) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest("input, textarea, [contenteditable=true]") || e.metaKey || e.ctrlKey || e.altKey) return;
+      const cols = round.categories.length;
+      const moves: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      if (moves[e.key]) {
+        e.preventDefault();
+        const [dc, dr] = moves[e.key];
+        setSel((s) => ({ c: (s.c + dc + cols) % cols, r: (s.r + dr + ROWS) % ROWS }));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        clueRef.current?.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [tab, round]);
+
+  if (!slug && !offline) return <Splash>Creating your quiz…</Splash>;
   if (!game) {
     return (
-      <main style={{ height: "100dvh", display: "grid", placeItems: "center" }}>
-        <div style={{ fontFamily: mono, fontSize: 13, letterSpacing: ".24em", color: C.dim }}>
-          {live.error ? live.error.toUpperCase() : "LOADING BOARD…"}
-        </div>
-      </main>
+      <Splash sub={live.error ? <a href="/">Back home</a> : undefined}>{live.error ? capitalise(live.error) : "Loading quiz…"}</Splash>
     );
   }
 
-  const selClue: Clue = selCat?.clues[sel.r] ?? { t: "", a: "" };
-  const media = selClue.media ?? "";
   const boardSeconds = game.timerSeconds ?? DEFAULT_CLUE_SECONDS;
-  const boardReadSeconds = game.readSeconds ?? DEFAULT_READ_SECONDS;
-  // Same rule as a board clue: an answer, plus either words or something to look at.
-  const finalReady = !!(game.final?.a.trim() && (game.final?.t.trim() || game.final?.media));
+  const boardRead = game.readSeconds ?? DEFAULT_READ_SECONDS;
+  const finalReady = !!game.final && isReady(game.final);
+  const clue: Clue = cat?.clues[sel.r] ?? { t: "", a: "" };
 
-  const publish = async () => {
-    setBusy(true);
-    const target = newSlug();
-    try {
-      await saveBoard(target, game);
-      rememberBoard({ slug: target, title: game.title, savedAt: Date.now() });
-      router.replace(`/edit/${target}`);
-    } catch (err) {
-      setNote({ text: (err as Error).message.toUpperCase(), ok: false });
-      setBusy(false);
-    }
-  };
-
-  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>, target: "clue" | "final" = "clue") => {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // let the same file be picked again after a failure
-    if (!file) return;
-
-    // Uploads are stored under the board's code, so a draft has nowhere to put
-    // them yet. Saying so beats a confusing failure.
-    if (!slug) {
-      setNote({ text: "SAVE & SHARE THIS BOARD FIRST — UPLOADS ARE STORED AGAINST ITS CODE", ok: false });
+  /** Jump to the next clue that still needs writing. */
+  const nextEmpty = () => {
+    const cells: { round: number; c: number; r: number }[] = [];
+    game.rounds.forEach((rd, ri) =>
+      rd.categories.forEach((ct, ci) => ct.clues.forEach((q, qi) => !isReady(q) && cells.push({ round: ri, c: ci, r: qi }))),
+    );
+    if (!cells.length) {
+      if (!finalReady) setTab("final");
+      else notify("Every clue is ready to play");
       return;
     }
-    // The final clue has no id of its own, so it gets a fixed one in the key.
-    const owner = target === "final" ? "final" : selClue.id;
-    if (!owner) return;
+    const here = tab === "final" ? -1 : roundIndex * 1000 + sel.c * 10 + sel.r;
+    const next = cells.find((x) => x.round * 1000 + x.c * 10 + x.r > here) ?? cells[0];
+    setTab(next.round);
+    setSel({ c: next.c, r: next.r });
+    setTimeout(() => clueRef.current?.focus(), 30);
+  };
 
+  const upload = async (file: File, target: "clue" | "final") => {
+    if (!slug) {
+      notify("Uploads need the room server — reconnect and try again", "error");
+      return;
+    }
+    const owner = target === "final" ? "final" : clue.id;
+    if (!owner) return;
     setUploading(true);
     setUploadPct(0);
     try {
       const up = await uploadMedia(slug, owner, file, setUploadPct);
       if (target === "final") emit({ type: "finalMedia", value: up.media, key: up.key });
-      else emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: up.media, key: up.key });
-      setNote({ text: `UPLOADED ${file.name.toUpperCase()}`, ok: true });
+      else emit({ type: "clueMedia", catId, row: sel.r, value: up.media, key: up.key });
+      notify("Uploaded");
     } catch (err) {
-      setNote({ text: (err as Error).message.toUpperCase(), ok: false });
+      notify(capitalise((err as Error).message), "error");
     } finally {
       setUploading(false);
       setUploadPct(0);
-      // Refresh after every attempt, successful or not: a failure is often
-      // *because* the board is full, which is exactly when the number matters.
-      if (slug) void storageUsage(slug).then(setUsage);
+      void storageUsage(slug).then(setUsage);
     }
   };
 
-  const attachYouTube = () => {
-    const id = youTubeId(youtube);
-    if (!id) {
-      setNote({ text: "THAT DOESN'T LOOK LIKE A YOUTUBE LINK", ok: false });
-      return;
-    }
-    // Stored in `mediaKey` like an upload's object key. Same field, same
-    // question on every screen: is there something here, and what do I point at?
-    emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: "youtube", key: id });
-    setYoutube("");
-    setNote({ text: `ATTACHED YOUTUBE ${id}`, ok: true });
-  };
-
-  const copy = async (text: string, message: string) => {
+  const retrySave = async () => {
+    const target = newSlug();
     try {
-      await navigator.clipboard.writeText(text);
-      setNote({ text: message, ok: true });
-    } catch {
-      // No clipboard permission, or an insecure origin. Showing the link is
-      // still useful — it can be selected by hand.
-      setNote({ text: text.toUpperCase(), ok: true });
+      await saveBoard(target, game);
+      rememberBoard({ slug: target, title: game.title, savedAt: Date.now() });
+      writeJson("draft", null);
+      router.replace(`/edit/${target}`);
+    } catch (err) {
+      notify(capitalise((err as Error).message), "error");
     }
   };
 
-  const armThen = (key: string, run: () => void) => () => {
-    if (armed === key) {
-      run();
-      setArmed("");
-    } else setArmed(key);
+  const mediaProps = {
+    uploading,
+    pct: uploadPct,
+    usage,
+    onError: (m: string) => notify(m, "error"),
   };
 
   return (
-    <main style={{ minHeight: "100dvh", display: "flex", flexDirection: "column" }}>
+    <main style={{ height: "100dvh", display: "flex", flexDirection: "column", background: C.bg }}>
+      {/* ---------------- header ---------------- */}
       <header
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 13,
-          padding: "13px 20px",
+          gap: 8,
+          padding: "10px 12px",
           borderBottom: `1px solid ${C.lineSoft}`,
+          background: C.panelDeep,
           flexWrap: "wrap",
         }}
       >
-        <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: ".1em" }}>BOARD EDITOR</div>
-        <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".16em", color: C.muted }}>
-          {stats.ready} / {stats.total} READY
-        </div>
-        <div style={{ width: 130, height: 7, background: C.surfaceDeep, border: `1px solid ${C.line}` }}>
-          <div style={{ height: "100%", width: `${stats.pct}%`, background: `linear-gradient(90deg,${C.good},${C.accent})` }} />
-        </div>
-        <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".14em", color: finalReady ? C.special : C.faint }}>
-          ◆ FINAL {finalReady ? "READY" : "EMPTY"}
-        </div>
+        <a href="/" className="btn btn-ghost btn-icon" aria-label="Home" title="Home">
+          <Icon name="arrowLeft" />
+        </a>
+        <Mark mark={theme.mark} size={30} />
+        <Synced
+          value={game.title}
+          onCommit={(v) => emit({ type: "meta", field: "title", value: v })}
+          placeholder="Quiz title"
+          className="input input-ghost display"
+          style={{ flex: "1 1 180px", maxWidth: 380, height: 40, fontSize: 20, padding: "0 8px" }}
+          ariaLabel="Quiz title"
+        />
+        <button className="chip tap" onClick={nextEmpty} title="Jump to the next unfinished clue" style={{ height: 30 }}>
+          <Ring value={stats.total ? stats.ready / stats.total : 0} />
+          <span className="num">
+            {stats.ready}/{stats.total}
+          </span>
+          <span className="hide-sm">ready</span>
+        </button>
 
         <div style={{ flex: 1 }} />
 
+        {collaborative && <Presence editors={live.editors} you={live.you} />}
+        {collaborative && <LiveDot connected={live.connected} />}
+
+        <button className="btn" onClick={() => setStyleOpen(true)}>
+          <Icon name="palette" /> <span className="hide-sm">Style</span>
+        </button>
+
         {collaborative ? (
           <>
-            <Presence editors={live.editors} you={live.you} connected={live.connected} />
-            <input
-              value={name}
-              onChange={(e) => {
-                const v = e.target.value.toUpperCase().slice(0, 24);
-                setName(v);
-                storeEditorName(v);
-              }}
-              style={{ width: 120, padding: "7px 9px", fontFamily: mono, fontSize: 11, letterSpacing: ".12em" }}
-            />
-            <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".18em", color: C.accent }}>CODE {slug}</div>
-            {/* Two different links, because they grant different things: the
-                read-only one is for whoever is hosting, the edit one is for a
-                co-author. Labelling them apart is the whole safeguard. */}
-            <button onClick={() => copy(`${location.origin}/edit/${slug}`, "SHARE LINK COPIED — READ-ONLY")} style={btn}>
-              ⧉ LINK
-            </button>
-            {live.canEdit && (
-              <button
-                onClick={() =>
-                  copy(
-                    linkWithKey(`/edit/${slug}`, keyFor("edit-key", slug!)),
-                    "EDIT LINK COPIED — ANYONE WITH IT CAN CHANGE THIS BOARD",
-                  )
-                }
-                style={{ ...btn, color: C.accent, borderColor: C.accentDeep }}
-              >
-                ⧉ EDIT LINK
-              </button>
-            )}
-            <button
-              onClick={() => router.push(`/host/${newRoomCode()}?board=${slug}`)}
-              className="tap lift"
-              style={{ ...btn, background: C.accent, color: C.onAccent, border: "none", fontWeight: 600 }}
+            <Popover
+              width={320}
+              trigger={({ toggle }) => (
+                <button className="btn" onClick={toggle}>
+                  <Icon name="share" /> <span className="hide-sm">Share</span>
+                </button>
+              )}
             >
-              ▶ START A GAME
+              {() => (
+                <SharePanel
+                  slug={slug!}
+                  canEdit={live.canEdit}
+                  name={name}
+                  onName={(v) => {
+                    setName(v);
+                    storeEditorName(v);
+                  }}
+                  notify={notify}
+                />
+              )}
+            </Popover>
+            <button className="btn btn-primary" onClick={() => router.push(`/host/${newRoomCode()}?board=${slug}`)}>
+              <Icon name="play" size={14} /> Play
             </button>
           </>
         ) : (
-          <button onClick={publish} disabled={busy} style={{ ...btn, background: C.good, color: C.onAccent, border: "none" }}>
-            {busy ? "PUBLISHING…" : "↑ SAVE & SHARE"}
+          <button className="btn btn-primary" onClick={retrySave}>
+            <Icon name="upload" size={16} /> Save
           </button>
         )}
-        <button onClick={() => setIoOpen((v) => !v)} style={btn}>
-          {ioOpen ? "▲ JSON" : "▼ JSON"}
+
+        <button className="btn btn-ghost btn-icon" onClick={() => setSettingsOpen(true)} aria-label="Settings" title="Settings">
+          <Icon name="settings" />
         </button>
       </header>
 
-      {(note || live.error) && (
-        <div
-          style={{
-            padding: "8px 20px",
-            fontFamily: mono,
-            fontSize: 11,
-            letterSpacing: ".14em",
-            color: note?.ok ? C.good : C.warn,
-            borderBottom: `1px solid ${C.lineSoft}`,
-          }}
-        >
-          {live.error ? live.error.toUpperCase() : note?.text}
+      {offline && (
+        <Banner tone="warn" icon="wifiOff">
+          Can&apos;t reach the server, so this quiz is only saved in this browser. Press Save once you&apos;re back online.
+        </Banner>
+      )}
+      {collaborative && !live.canEdit && (
+        <Banner tone="info" icon="eye">
+          View only. Ask the owner for the edit link to make changes.
+        </Banner>
+      )}
+
+      {/* ---------------- tabs ---------------- */}
+      <nav
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+          padding: "8px 12px",
+          borderBottom: `1px solid ${C.lineSoft}`,
+          overflowX: "auto",
+        }}
+      >
+        {game.rounds.map((r, i) => (
+          <TabButton key={r.id ?? i} on={tab === i} onClick={() => setTab(i)}>
+            {r.name || `Round ${i + 1}`}
+          </TabButton>
+        ))}
+        {game.rounds.length < MAX_ROUNDS && (
+          <button
+            className="btn btn-ghost btn-sm btn-icon"
+            title="Add a round (values doubled)"
+            aria-label="Add round"
+            onClick={() => {
+              emit({ type: "roundAdd" });
+              setTab(game.rounds.length);
+              setSel({ c: 0, r: 0 });
+            }}
+          >
+            <Icon name="plus" size={16} />
+          </button>
+        )}
+        <div style={{ width: 1, height: 20, background: C.line, margin: "0 6px" }} />
+        <TabButton on={tab === "final"} onClick={() => setTab("final")} color={C.special}>
+          <span className="dot" style={{ background: finalReady ? C.good : C.edge }} />
+          Final
+        </TabButton>
+        <div style={{ flex: 1 }} />
+        {tab !== "final" && (
+          <button
+            className="btn btn-sm"
+            onClick={() => emit({ type: "catAdd", round: roundIndex })}
+            disabled={(round?.categories.length ?? 0) >= MAX_CATS}
+          >
+            <Icon name="plus" size={15} /> Category
+          </button>
+        )}
+      </nav>
+
+      {/* ---------------- body ---------------- */}
+      {tab === "final" ? (
+        <div className="scroll" style={{ flex: 1, minHeight: 0, padding: "24px 16px 48px" }}>
+          <FinalEditor
+            final={game.final}
+            boardSeconds={boardSeconds}
+            boardRead={boardRead}
+            emit={emit}
+            onUpload={(f) => upload(f, "final")}
+            {...mediaProps}
+          />
+        </div>
+      ) : (
+        <div className="editor-body" style={{ flex: 1, minHeight: 0 }}>
+          <section className="scroll" style={{ padding: 12, minWidth: 0, minHeight: 0 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: `52px repeat(${round?.categories.length ?? 1}, minmax(128px,1fr))`,
+                gridTemplateRows: `auto repeat(${ROWS}, minmax(84px,1fr))`,
+                gap: 6,
+                height: "100%",
+                minHeight: 520,
+              }}
+            >
+              <div />
+              {round?.categories.map((ct, ci) => (
+                <CategoryHeader
+                  key={ct.id}
+                  name={ct.name}
+                  canDelete={round.categories.length > MIN_CATS}
+                  first={ci === 0}
+                  last={ci === round.categories.length - 1}
+                  onName={(v) => emit({ type: "catName", catId: ct.id!, value: v })}
+                  onMove={(dir) => emit({ type: "catMove", catId: ct.id!, dir })}
+                  onDelete={() => emit({ type: "catDelete", catId: ct.id! })}
+                />
+              ))}
+              {Array.from({ length: ROWS }, (_, ri) => (
+                <RowCells
+                  key={ri}
+                  ri={ri}
+                  value={round?.values[ri] ?? 0}
+                  roundIndex={roundIndex}
+                  emit={emit}
+                  cells={(round?.categories ?? []).map((ct, ci) => {
+                    const q = ct.clues[ri];
+                    return (
+                      <Cell
+                        key={q.id ?? `${ci}-${ri}`}
+                        clue={q}
+                        value={round!.values[ri]}
+                        active={ci === sel.c && ri === sel.r}
+                        watchers={focusByCell.get(`${ct.id}:${ri}`) ?? []}
+                        onClick={() => setSel({ c: ci, r: ri })}
+                      />
+                    );
+                  })}
+                />
+              ))}
+            </div>
+          </section>
+
+          <aside
+            className="scroll editor-inspector"
+            style={{
+              borderLeft: `1px solid ${C.lineSoft}`,
+              background: C.panelDeep,
+              padding: 20,
+              display: "flex",
+              flexDirection: "column",
+              gap: 18,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="truncate" style={{ fontSize: 13, color: C.muted }}>
+                  {cat?.name || "Untitled category"}
+                </div>
+                <div className="display num" style={{ fontSize: 24, color: C.accent }}>
+                  {round?.values[sel.r]}
+                </div>
+              </div>
+              <button
+                className="btn btn-ghost btn-icon btn-sm"
+                aria-label="Previous clue"
+                onClick={() => {
+                  const n = (round?.categories.length ?? 1) * ROWS;
+                  const i = (sel.c * ROWS + sel.r - 1 + n) % n;
+                  setSel({ c: Math.floor(i / ROWS), r: i % ROWS });
+                }}
+              >
+                <Icon name="chevronLeft" />
+              </button>
+              <button
+                className="btn btn-ghost btn-icon btn-sm"
+                aria-label="Next clue"
+                onClick={() => {
+                  const n = (round?.categories.length ?? 1) * ROWS;
+                  const i = (sel.c * ROWS + sel.r + 1) % n;
+                  setSel({ c: Math.floor(i / ROWS), r: i % ROWS });
+                }}
+              >
+                <Icon name="chevronRight" />
+              </button>
+            </div>
+
+            {(() => {
+              const w = focusByCell.get(`${catId}:${sel.r}`) ?? [];
+              if (!w.length) return null;
+              return (
+                <div className="chip" style={{ color: C.onAccent, background: w[0].color, alignSelf: "flex-start" }}>
+                  {w.map((x) => x.name).join(", ")} {w.length > 1 ? "are" : "is"} here too
+                </div>
+              );
+            })()}
+
+            <Field label="Clue">
+              <Synced
+                key={`${catId}:${sel.r}:t`}
+                multiline
+                inputRef={clueRef}
+                value={clue.t}
+                onCommit={(v) => emit({ type: "clueText", catId, row: sel.r, field: "t", value: v })}
+                placeholder="What the host reads out"
+                className="input"
+                style={{ height: 120, fontSize: 16 }}
+              />
+            </Field>
+
+            <Field label="Answer">
+              <Synced
+                key={`${catId}:${sel.r}:a`}
+                value={clue.a}
+                onCommit={(v) => emit({ type: "clueText", catId, row: sel.r, field: "a", value: v })}
+                placeholder="What is…?"
+                className="input"
+                style={{ fontWeight: 600, color: C.info }}
+              />
+            </Field>
+
+            <MediaPicker
+              key={`${catId}:${sel.r}:m`}
+              media={clue.media}
+              mediaKey={clue.mediaKey}
+              mediaLabel={clue.mediaLabel}
+              onUpload={(f) => upload(f, "clue")}
+              onYouTube={(id) => emit({ type: "clueMedia", catId, row: sel.r, value: "youtube", key: id })}
+              onRemove={() => emit({ type: "clueMedia", catId, row: sel.r, value: null })}
+              onCaption={(v) => emit({ type: "clueText", catId, row: sel.r, field: "mediaLabel", value: v })}
+              {...mediaProps}
+            />
+
+            <SwitchRow
+              icon="zap"
+              label="Daily Double"
+              hint="One player wagers on it alone"
+              checked={!!clue.dd}
+              onChange={(v) => emit({ type: "clueDD", catId, row: sel.r, value: v })}
+            />
+
+            <Timing
+              key={`${catId}:${sel.r}:time`}
+              timerOff={!!clue.timerOff}
+              seconds={clue.seconds}
+              readSeconds={clue.readSeconds}
+              boardSeconds={boardSeconds}
+              boardRead={boardRead}
+              isVideo={clue.media === "video" || clue.media === "youtube"}
+              onTimerOff={(v) => emit({ type: "clueTimerOff", catId, row: sel.r, value: v })}
+              onSeconds={(v) => emit({ type: "clueSeconds", catId, row: sel.r, value: v })}
+              onRead={(v) => emit({ type: "clueReadSeconds", catId, row: sel.r, value: v })}
+            />
+
+            <div style={{ marginTop: "auto", display: "flex", justifyContent: "flex-end" }}>
+              <ConfirmButton
+                className="btn btn-ghost btn-sm btn-danger"
+                confirmLabel="Tap again to clear"
+                onConfirm={() => emit({ type: "clueClear", catId, row: sel.r })}
+              >
+                <Icon name="trash" size={15} /> Clear clue
+              </ConfirmButton>
+            </div>
+          </aside>
         </div>
       )}
 
-      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "292px minmax(0,1fr) 392px", minHeight: 0 }}>
-        {/* ---- left ---- */}
-        <aside style={aside}>
-          <Section label="IDENTITY">
-            <Field label="GAME TITLE">
-              <Synced value={game.title} onCommit={(v) => emit({ type: "meta", field: "title", value: v })} style={input} />
-            </Field>
-            <Field label="ROUND LINE">
-              <Synced
-                value={game.subtitle}
-                onCommit={(v) => emit({ type: "meta", field: "subtitle", value: v })}
-                style={{ ...input, fontFamily: mono, fontSize: 11, letterSpacing: ".14em" }}
-              />
-            </Field>
-          </Section>
+      <StylePanel
+        open={styleOpen}
+        onClose={() => setStyleOpen(false)}
+        theme={theme}
+        presetId={theme.presetId}
+        style={game.style ?? {}}
+        onPreset={(id) => {
+          emit({ type: "theme", value: id });
+          emit({ type: "style", value: null });
+        }}
+        onStyle={(value) => emit({ type: "style", value })}
+      />
 
-          <Section label="THEME">
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              {THEMES.map((t) => {
-                const on = t.id === theme.id;
-                return (
-                  <button
-                    key={t.id}
-                    onClick={() => emit({ type: "theme", value: t.id })}
-                    title={t.blurb}
-                    style={{
-                      ...btn,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      textAlign: "left",
-                      padding: "8px 10px",
-                      color: on ? C.accent : C.dim,
-                      borderColor: on ? C.accent : C.edgeSoft,
-                    }}
-                  >
-                    {/* Each theme's own accent, not the live one — the point is
-                        to see what you are choosing before you choose it. */}
-                    <span
-                      style={{
-                        width: 12,
-                        height: 12,
-                        flex: "none",
-                        background: t.colors.accent,
-                        border: `1px solid ${t.colors.edge}`,
-                        transform: "rotate(45deg)",
-                      }}
-                    />
-                    <span style={{ flex: 1, minWidth: 0 }}>{t.name.toUpperCase()}</span>
-                    {on && <span style={{ fontSize: 9, color: C.accent }}>●</span>}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint, lineHeight: 1.7 }}>
-              {theme.blurb.toUpperCase()}
-            </div>
-          </Section>
+      <SettingsDrawer
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        game={game}
+        roundIndex={tab === "final" ? null : roundIndex}
+        emit={emit}
+        notify={notify}
+        onRoundDeleted={() => {
+          setTab(Math.max(0, roundIndex - 1));
+          setSettingsOpen(false);
+        }}
+        onBlank={() => emit({ type: "replace", game: { ...blankGame(), theme: game.theme, style: game.style } })}
+      />
 
-          <Section label={`VALUE LADDER · ${selRound?.name || `ROUND ${roundIndex + 1}`}`}>
-            {(selRound?.values ?? []).map((v, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                <div style={{ fontFamily: mono, fontSize: 11, color: C.mutedDeep, width: 22 }}>R{i + 1}</div>
-                <Synced
-                  key={`${roundIndex}:${i}`}
-                  value={String(v)}
-                  onCommit={(raw) =>
-                    emit({
-                      type: "value",
-                      round: roundIndex,
-                      row: i,
-                      value: Number(raw.replace(/[^0-9-]/g, "")) || 0,
-                    })
-                  }
-                  style={{ ...input, flex: 1, fontFamily: mono, fontSize: 13 }}
-                />
-              </div>
-            ))}
-            {roundIndex > 0 && (
-              <button onClick={() => emit({ type: "roundDouble", index: roundIndex })} style={{ ...btn, fontSize: 10 }}>
-                ×2 MATCH THE PREVIOUS ROUND, DOUBLED
-              </button>
-            )}
-          </Section>
-
-          <Section label="TIMER">
-            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <div style={{ fontFamily: mono, fontSize: 10, color: C.mutedDeep, flex: 1 }}>BOARD DEFAULT</div>
-              <Synced
-                value={String(boardSeconds)}
-                onCommit={(raw) => {
-                  const n = Number(raw.replace(/[^0-9]/g, ""));
-                  if (n) emit({ type: "boardSeconds", value: n });
-                }}
-                style={{ ...input, width: 74, fontFamily: mono, fontSize: 13, textAlign: "center" }}
-              />
-              <span style={{ fontFamily: mono, fontSize: 11, color: C.faint }}>SEC</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-              <div style={{ fontFamily: mono, fontSize: 10, color: C.mutedDeep, flex: 1 }}>READ DELAY</div>
-              <Synced
-                value={String(boardReadSeconds)}
-                onCommit={(raw) => emit({ type: "boardReadSeconds", value: Number(raw.replace(/[^0-9]/g, "")) || 0 })}
-                style={{ ...input, width: 74, fontFamily: mono, fontSize: 13, textAlign: "center" }}
-              />
-              <span style={{ fontFamily: mono, fontSize: 11, color: C.faint }}>SEC</span>
-            </div>
-            <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint, lineHeight: 1.8 }}>
-              ANY CLUE CAN OVERRIDE BOTH. THE READ DELAY HOLDS
-              <br />
-              THE BUZZERS SHUT WHILE THE CLUE IS READ OUT.
-            </div>
-          </Section>
-
-          <Section label="FINAL ROUND">
-            <Field label="CATEGORY">
-              <Synced
-                value={game.final?.category ?? ""}
-                onCommit={(v) => emit({ type: "final", field: "category", value: v })}
-                placeholder="WORLD CAPITALS"
-                style={input}
-              />
-            </Field>
-            <Field label="CLUE">
-              <Synced
-                multiline
-                value={game.final?.t ?? ""}
-                onCommit={(v) => emit({ type: "final", field: "t", value: v })}
-                placeholder="Everyone answers this one at the end."
-                style={{ ...input, height: 84, fontSize: 14, lineHeight: 1.45 }}
-              />
-            </Field>
-            <Field label="CORRECT RESPONSE">
-              <Synced
-                value={game.final?.a ?? ""}
-                onCommit={(v) => emit({ type: "final", field: "a", value: v })}
-                placeholder="What is …?"
-                style={{ ...input, color: C.info, fontWeight: 600 }}
-              />
-            </Field>
-            <Field label="TIME TO WRITE">
-              <button
-                onClick={() => emit({ type: "finalTimerOff", value: !game.final?.timerOff })}
-                style={{
-                  ...btn,
-                  padding: "9px",
-                  fontSize: 10,
-                  fontWeight: 600,
-                  color: game.final?.timerOff ? C.onAccent : C.text,
-                  background: game.final?.timerOff ? C.warn : C.surface,
-                  borderColor: game.final?.timerOff ? C.warn : C.edge,
-                }}
-              >
-                {game.final?.timerOff ? "⏸ NO TIMER" : "⏱ TIMED"}
-              </button>
-              {!game.final?.timerOff && (
-                <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
-                  <Synced
-                    value={game.final?.seconds ? String(game.final.seconds) : ""}
-                    onCommit={(raw) => {
-                      const n = Number(raw.replace(/[^0-9]/g, ""));
-                      emit({ type: "finalSeconds", value: raw.trim() === "" || !n ? null : n });
-                    }}
-                    placeholder={`${boardSeconds} (BOARD DEFAULT)`}
-                    style={{ ...input, flex: 1, fontFamily: mono, fontSize: 12 }}
-                  />
-                  <span style={{ fontFamily: mono, fontSize: 10, color: C.faint }}>SEC</span>
-                </div>
-              )}
-            </Field>
-
-            <Field label="READ DELAY">
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <Synced
-                  value={game.final?.readSeconds === undefined ? "" : String(game.final.readSeconds)}
-                  onCommit={(raw) => {
-                    const trimmed = raw.trim();
-                    emit({
-                      type: "finalReadSeconds",
-                      value: trimmed === "" ? null : Number(trimmed.replace(/[^0-9]/g, "")) || 0,
-                    });
-                  }}
-                  placeholder={`${boardReadSeconds} (BOARD DEFAULT)`}
-                  style={{ ...input, flex: 1, fontFamily: mono, fontSize: 12 }}
-                />
-                <span style={{ fontFamily: mono, fontSize: 10, color: C.faint }}>SEC</span>
-              </div>
-              <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint, marginTop: 4 }}>
-                THE WRITING CLOCK STARTS AFTER THIS.
-              </div>
-            </Field>
-
-            <Field label="MEDIA">
-              {game.final?.mediaKey ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  <ClueMedia
-                    media={game.final.media ?? "image"}
-                    mediaKey={game.final.mediaKey}
-                    label={game.final.mediaLabel}
-                    height={96}
-                    border={C.line}
-                  />
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <label style={{ ...btn, flex: 1, textAlign: "center", cursor: "pointer", fontSize: 10 }}>
-                      ⟳ REPLACE
-                      <input type="file" accept="image/*,video/*,audio/*" hidden onChange={(e) => onPickFile(e, "final")} />
-                    </label>
-                    <button onClick={() => emit({ type: "finalMedia", value: null })} style={{ ...btn, flex: 1, fontSize: 10, color: C.warn }}>
-                      ✕ REMOVE
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <label
-                  style={{
-                    ...btn,
-                    textAlign: "center",
-                    cursor: uploading ? "progress" : "pointer",
-                    borderStyle: "dashed",
-                    fontSize: 10,
-                    padding: "11px",
-                  }}
-                >
-                  {uploading ? `UPLOADING ${Math.round(uploadPct * 100)}%` : "⬆ IMAGE OR VIDEO"}
-                  <input type="file" accept="image/*,video/*,audio/*" hidden disabled={uploading} onChange={(e) => onPickFile(e, "final")} />
-                </label>
-              )}
-            </Field>
-          </Section>
-
-          <Section label="BOARD">
-            <button
-              onClick={armThen("blank", () => emit({ type: "replace", game: blankGame() }))}
-              style={{ ...btn, color: armed === "blank" ? C.warn : C.text, borderColor: armed === "blank" ? C.warn : C.edgeSoft }}
-            >
-              {armed === "blank" ? "TAP AGAIN — WIPES EVERYTHING" : "✕ BLANK BOARD"}
-            </button>
-            <a href="/edit" style={{ ...btn, display: "block", textAlign: "center", textDecoration: "none" }}>
-              + NEW BOARD
-            </a>
-          </Section>
-
-          {boards.length > 0 && (
-            <Section label="YOUR BOARDS">
-              {boards.map((b) => (
-                <a
-                  key={b.slug}
-                  href={`/edit/${b.slug}`}
-                  style={{
-                    display: "flex",
-                    gap: 8,
-                    padding: "7px 9px",
-                    background: b.slug === slug ? alpha(C.accent, 10) : C.surfaceDeep,
-                    border: `1px solid ${b.slug === slug ? C.accentDeep : C.lineFaint}`,
-                    textDecoration: "none",
-                    color: C.text,
-                  }}
-                >
-                  <span style={{ fontFamily: mono, fontSize: 11, color: C.accent }}>{b.slug}</span>
-                  <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.title}</span>
-                </a>
-              ))}
-            </Section>
-          )}
-        </aside>
-
-        {/* ---- centre ---- */}
-        <section style={{ padding: 16, display: "flex", flexDirection: "column", gap: 11, minWidth: 0, minHeight: 0 }}>
-          {/* One tab per round. The rounds are played in this order, so they
-              are shown in it — there is no reordering control because moving
-              round two in front of round one is not a thing anyone means. */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            {game.rounds.map((r, i) => {
-              const on = i === roundIndex;
-              return (
-                <button
-                  key={r.id ?? i}
-                  onClick={() => setSel({ round: i, c: 0, r: 0 })}
-                  className="tap"
-                  style={{
-                    ...btn,
-                    padding: "8px 14px",
-                    fontWeight: 600,
-                    color: on ? C.onAccent : C.dim,
-                    background: on ? C.accent : C.surface,
-                    borderColor: on ? C.accent : C.edge,
-                  }}
-                >
-                  {r.name || `ROUND ${i + 1}`}
-                </button>
-              );
-            })}
-            {game.rounds.length < MAX_ROUNDS && (
-              <button
-                onClick={() => {
-                  emit({ type: "roundAdd" });
-                  setSel({ round: game.rounds.length, c: 0, r: 0 });
-                }}
-                style={{ ...btn, color: C.good, borderColor: C.edge }}
-              >
-                + ROUND
-              </button>
-            )}
-            {game.rounds.length > 1 && (
-              <button
-                onClick={armThen("delround", () => {
-                  emit({ type: "roundDelete", index: roundIndex });
-                  setSel({ round: Math.max(0, roundIndex - 1), c: 0, r: 0 });
-                })}
-                style={{
-                  ...btn,
-                  color: armed === "delround" ? C.onAccent : C.warn,
-                  background: armed === "delround" ? C.warn : C.surface,
-                  borderColor: C.warn,
-                }}
-              >
-                {armed === "delround" ? "TAP AGAIN — DELETES THIS ROUND" : "✕ ROUND"}
-              </button>
-            )}
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <Synced
-              key={`roundname:${roundIndex}`}
-              value={selRound?.name ?? ""}
-              onCommit={(v) => emit({ type: "roundName", index: roundIndex, value: v })}
-              placeholder="ROUND NAME"
-              style={{ ...input, width: 190, fontFamily: mono, fontSize: 11, letterSpacing: ".14em" }}
-            />
-            <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: C.muted }}>
-              {collaborative ? "EVERYONE HERE EDITS THE SAME BOARD, LIVE" : "CLICK A CELL TO WRITE IT"}
-            </div>
-            <div style={{ flex: 1 }} />
-            <button
-              onClick={() => emit({ type: "catAdd", round: roundIndex })}
-              disabled={(selRound?.categories.length ?? 0) >= MAX_CATS}
-              style={{ ...btn, background: C.good, color: C.onAccent, border: "none" }}
-            >
-              + ADD CATEGORY
-            </button>
-          </div>
-
-          <div
-            style={{
-              flex: 1,
-              minHeight: 0,
-              display: "grid",
-              gridTemplateColumns: `repeat(${selRound?.categories.length ?? 1}, minmax(0,1fr))`,
-              gap: 7,
-            }}
-          >
-            {(selRound?.categories ?? []).map((cat, ci) => (
-              <div key={cat.id} style={{ display: "grid", gridTemplateRows: `72px repeat(${ROWS},1fr)`, gap: 6, minWidth: 0 }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  <Synced
-                    value={cat.name}
-                    onCommit={(v) => emit({ type: "catName", catId: cat.id!, value: v })}
-                    placeholder="CATEGORY"
-                    style={{ ...input, textAlign: "center", fontWeight: 600, borderTop: `2px solid ${C.accent}` }}
-                  />
-                  <div style={{ display: "flex", gap: 4 }}>
-                    <button onClick={() => emit({ type: "catMove", catId: cat.id!, dir: -1 })} style={{ ...miniBtn, flex: 1 }}>◀</button>
-                    <button onClick={() => emit({ type: "catMove", catId: cat.id!, dir: 1 })} style={{ ...miniBtn, flex: 1 }}>▶</button>
-                    <button
-                      onClick={() => emit({ type: "catDelete", catId: cat.id! })}
-                      disabled={(selRound?.categories.length ?? 0) <= MIN_CATS}
-                      style={{ ...miniBtn, flex: 1, color: (selRound?.categories.length ?? 0) > MIN_CATS ? C.warn : C.edge }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-
-                {cat.clues.map((q, ri) => {
-                  const done = isReady(q);
-                  const started = isStarted(q);
-                  const active = ci === sel.c && ri === sel.r;
-                  const watchers = focusByCell.get(`${cat.id}:${ri}`) ?? [];
-                  return (
-                    <button
-                      key={q.id ?? ri}
-                      onClick={() => setSel({ round: roundIndex, c: ci, r: ri })}
-                      className="tap"
-                      style={{
-                        position: "relative",
-                        textAlign: "left",
-                        transition: "background .16s var(--snap), border-color .16s var(--snap), transform .11s var(--snap)",
-                        padding: "8px 9px",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 5,
-                        overflow: "hidden",
-                        background: active ? alpha(C.accent, 10) : done ? C.tile : C.panelDeep,
-                        border: `1px solid ${watchers.length ? watchers[0].color : active ? C.accent : C.lineFaint}`,
-                        clipPath: "polygon(0 0,100% 0,100% 84%,93% 100%,0 100%)",
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 5, width: "100%" }}>
-                        <span style={{ fontFamily: mono, fontSize: 11, fontWeight: 600, color: active ? C.accent : C.mutedDeep }}>
-                          {selRound?.values[ri]}
-                        </span>
-                        <span style={{ flex: 1 }} />
-                        {watchers.map((w) => (
-                          <span
-                            key={w.id}
-                            title={w.name}
-                            style={{ width: 6, height: 6, borderRadius: "50%", background: w.color }}
-                          />
-                        ))}
-                        {q.timerOff && (
-                          <span
-                            title="No timer"
-                            style={{ fontFamily: mono, fontSize: 9, color: C.warn, border: `1px solid ${C.warn}`, padding: "0 3px", lineHeight: 1.3 }}
-                          >
-                            ∞
-                          </span>
-                        )}
-                        {!!(q.readSeconds ?? boardReadSeconds) && (
-                          <span
-                            title={`Buzzers open ${q.readSeconds ?? boardReadSeconds}s after this clue appears`}
-                            style={{
-                              fontFamily: mono,
-                              fontSize: 8,
-                              color: C.info,
-                              border: `1px solid ${alpha(C.info, 35)}`,
-                              padding: "1px 3px",
-                              lineHeight: 1.3,
-                            }}
-                          >
-                            ⏸{q.readSeconds ?? boardReadSeconds}
-                          </span>
-                        )}
-                        {q.dd && (
-                          <span style={{ fontFamily: mono, fontSize: 8, color: C.onAccent, background: C.warn, padding: "1px 4px" }}>DD</span>
-                        )}
-                        {q.media && (
-                          <span style={{ fontFamily: mono, fontSize: 8, color: C.info, border: `1px solid ${alpha(C.info, 35)}`, padding: "1px 4px" }}>
-                            {q.media === "video" ? "VID" : "IMG"}
-                          </span>
-                        )}
-                        <span
-                          style={{ width: 6, height: 6, transform: "rotate(45deg)", background: done ? C.good : started ? C.warn : C.edge }}
-                        />
-                      </div>
-                      <div style={{ fontSize: 11, lineHeight: 1.35, color: q.t.trim() || q.media ? C.text : C.faint }}>
-                        {/* A media clue with no words is not empty — say what
-                            it actually is rather than calling it unwritten. */}
-                        {q.t.trim()
-                          ? trunc(q.t, 58)
-                          : q.media
-                            ? q.mediaLabel?.trim() || `[ ${q.media.toUpperCase()} ]`
-                            : "EMPTY"}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-
-          {ioOpen && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              <div style={{ display: "flex", gap: 7 }}>
-                <button onClick={() => setIoText(JSON.stringify(game, null, 2))} style={btn}>↑ EXPORT</button>
-                <button
-                  onClick={() => {
-                    try {
-                      const parsed = parseGame(JSON.parse(ioText));
-                      if (!parsed) throw new Error('needs a non-empty "categories" array');
-                      emit({ type: "replace", game: parsed });
-                      setNote({ text: "LOADED FROM JSON", ok: true });
-                    } catch (err) {
-                      setNote({ text: (err as Error).message.toUpperCase(), ok: false });
-                    }
-                  }}
-                  style={{ ...btn, background: C.good, color: C.onAccent, border: "none" }}
-                >
-                  ↓ LOAD
-                </button>
-              </div>
-              <textarea
-                value={ioText}
-                onChange={(e) => setIoText(e.target.value)}
-                placeholder="Paste a game here, or hit EXPORT to copy this one out."
-                style={{ ...input, height: 110, fontFamily: mono, fontSize: 11, lineHeight: 1.6 }}
-              />
-            </div>
-          )}
-        </section>
-
-        {/* ---- right ---- */}
-        <aside style={{ ...aside, borderLeft: `1px solid ${C.lineSoft}`, borderRight: "none" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: C.accent, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {selCat?.name || "UNTITLED"}
-            </div>
-            <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: C.dim }}>{selRound?.values[sel.r]}</div>
-          </div>
-
-          {(() => {
-            const watchers = focusByCell.get(`${selCatId}:${sel.r}`) ?? [];
-            if (!watchers.length) return null;
-            return (
-              <div
-                style={{
-                  fontFamily: mono,
-                  fontSize: 10,
-                  letterSpacing: ".14em",
-                  color: watchers[0].color,
-                  border: `1px solid ${watchers[0].color}`,
-                  padding: "7px 9px",
-                }}
-              >
-                {watchers.map((w) => w.name).join(", ")} {watchers.length > 1 ? "ARE" : "IS"} IN THIS CLUE TOO
-              </div>
-            );
-          })()}
-
-          <Field label="CLUE · READ ALOUD">
-            <Synced
-              key={`${selCatId}:${sel.r}:t`}
-              multiline
-              value={selClue.t}
-              onCommit={(v) => emit({ type: "clueText", catId: selCatId, row: sel.r, field: "t", value: v })}
-              placeholder="Write it exactly as it should be read out."
-              style={{ ...input, height: 140, fontSize: 15, lineHeight: 1.5 }}
-            />
-          </Field>
-
-          <Field label="CORRECT RESPONSE">
-            <Synced
-              key={`${selCatId}:${sel.r}:a`}
-              value={selClue.a}
-              onCommit={(v) => emit({ type: "clueText", catId: selCatId, row: sel.r, field: "a", value: v })}
-              placeholder="Who is …?"
-              style={{ ...input, fontSize: 16, fontWeight: 600, color: C.info }}
-            />
-          </Field>
-
-          <button
-            onClick={() => emit({ type: "clueDD", catId: selCatId, row: sel.r, value: !selClue.dd })}
-            style={{
-              ...btn,
-              padding: "12px",
-              fontWeight: 600,
-              color: selClue.dd ? C.onAccent : C.dim,
-              background: selClue.dd ? C.warn : C.surface,
-              borderColor: selClue.dd ? C.warn : C.edgeSoft,
-            }}
-          >
-            {selClue.dd ? "◆ DAILY DOUBLE · ON" : "◇ MAKE THIS A DAILY DOUBLE"}
-          </button>
-
-          <Field label="MEDIA ON THE TV">
-            {selClue.mediaKey ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <ClueMedia
-                  media={selClue.media ?? "image"}
-                  mediaKey={selClue.mediaKey}
-                  label={selClue.mediaLabel}
-                  height={128}
-                  border={C.line}
-                />
-                <div style={{ display: "flex", gap: 6 }}>
-                  <label style={{ ...btn, flex: 1, textAlign: "center", cursor: "pointer" }}>
-                    ⟳ REPLACE
-                    <input type="file" accept="image/*,video/*,audio/*" hidden onChange={onPickFile} />
-                  </label>
-                  <button
-                    onClick={() => emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: null })}
-                    style={{ ...btn, flex: 1, color: C.warn }}
-                  >
-                    ✕ REMOVE
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <label
-                  style={{
-                    ...btn,
-                    textAlign: "center",
-                    cursor: uploading ? "progress" : "pointer",
-                    borderStyle: "dashed",
-                    borderColor: uploading ? C.accent : C.edge,
-                    padding: "14px",
-                  }}
-                >
-                  {uploading ? `UPLOADING ${Math.round(uploadPct * 100)}%` : "⬆ UPLOAD IMAGE, VIDEO OR AUDIO"}
-                  <input type="file" accept="image/*,video/*,audio/*" hidden disabled={uploading} onChange={onPickFile} />
-                </label>
-                {uploading && (
-                  <div style={{ height: 4, background: C.surfaceDeep, border: `1px solid ${C.line}` }}>
-                    <div style={{ height: "100%", width: `${uploadPct * 100}%`, background: C.accent }} />
-                  </div>
-                )}
-
-                {/* A YouTube clue stores an id, not a file. It costs no storage,
-                    which is the difference between a board of clips being
-                    shareable and being a bill. */}
-                <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".12em", color: C.faint, marginTop: 4, lineHeight: 1.8 }}>
-                  UP TO {mediaLimitLabel()} PER FILE
-                  {usage && (
-                    <>
-                      {" · "}
-                      <span style={{ color: usage.board / usage.boardLimit > 0.8 ? C.warn : C.faint }}>
-                        THIS BOARD: {formatBytes(usage.board)} / {formatBytes(usage.boardLimit)}
-                      </span>
-                    </>
-                  )}
-                  <br />
-                  OR PASTE A YOUTUBE LINK — COSTS NO STORAGE:
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <input
-                    value={youtube}
-                    onChange={(e) => setYoutube(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && attachYouTube()}
-                    placeholder="youtube.com/watch?v=…"
-                    style={{ ...input, flex: 1, fontFamily: mono, fontSize: 11 }}
-                  />
-                  <button
-                    onClick={attachYouTube}
-                    disabled={!youTubeId(youtube)}
-                    style={{ ...btn, fontSize: 10, color: youTubeId(youtube) ? C.accent : C.faint }}
-                  >
-                    ATTACH
-                  </button>
-                </div>
-
-                <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".12em", color: C.faint, marginTop: 4 }}>
-                  OR JUST MARK A PLACEHOLDER:
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  {([["", "NONE"], ["image", "IMAGE"], ["video", "VIDEO"], ["audio", "AUDIO"]] as const).map(([key, label]) => (
-                    <button
-                      key={label}
-                      onClick={() => emit({ type: "clueMedia", catId: selCatId, row: sel.r, value: key === "" ? null : key })}
-                      style={{
-                        ...btn,
-                        flex: 1,
-                        fontSize: 10,
-                        color: media === key ? C.onAccent : C.dim,
-                        background: media === key ? C.accent : C.surface,
-                        borderColor: media === key ? C.accent : C.edgeSoft,
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {media && (
-              <Synced
-                key={`${selCatId}:${sel.r}:m`}
-                value={selClue.mediaLabel ?? ""}
-                onCommit={(v) => emit({ type: "clueText", catId: selCatId, row: sel.r, field: "mediaLabel", value: v })}
-                placeholder="CAPTION (OPTIONAL)"
-                style={{ ...input, fontFamily: mono, fontSize: 11, marginTop: 6 }}
-              />
-            )}
-          </Field>
-
-          <Field label="TIMER">
-            <button
-              onClick={() => emit({ type: "clueTimerOff", catId: selCatId, row: sel.r, value: !selClue.timerOff })}
-              style={{
-                ...btn,
-                padding: "11px",
-                fontWeight: 600,
-                color: selClue.timerOff ? C.onAccent : C.text,
-                background: selClue.timerOff ? C.warn : C.surface,
-                borderColor: selClue.timerOff ? C.warn : C.edge,
-              }}
-            >
-              {selClue.timerOff ? "⏸ NO TIMER ON THIS CLUE" : "⏱ TIMED"}
-            </button>
-
-            {!selClue.timerOff && (
-              <>
-                <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
-                  <Synced
-                    key={`${selCatId}:${sel.r}:secs`}
-                    value={selClue.seconds ? String(selClue.seconds) : ""}
-                    onCommit={(raw) => {
-                      const n = Number(raw.replace(/[^0-9]/g, ""));
-                      emit({ type: "clueSeconds", catId: selCatId, row: sel.r, value: raw.trim() === "" || !n ? null : n });
-                    }}
-                    placeholder={`${boardSeconds} (BOARD DEFAULT)`}
-                    style={{ ...input, flex: 1, fontFamily: mono, fontSize: 13 }}
-                  />
-                  <span style={{ fontFamily: mono, fontSize: 11, color: C.faint }}>SEC</span>
-                </div>
-                <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint, marginTop: 4 }}>
-                  {selClue.seconds
-                    ? `THIS CLUE RUNS ${selClue.seconds}s`
-                    : `LEAVE EMPTY TO USE THE BOARD DEFAULT (${boardSeconds}s)`}
-                </div>
-              </>
-            )}
-
-            {selClue.timerOff && (
-              <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.warn, marginTop: 4, lineHeight: 1.8 }}>
-                BUZZERS STAY OPEN UNTIL THE HOST CLOSES THE CLUE.
-              </div>
-            )}
-          </Field>
-
-          <Field label="READ DELAY BEFORE BUZZERS OPEN">
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <Synced
-                key={`${selCatId}:${sel.r}:read`}
-                value={selClue.readSeconds === undefined ? "" : String(selClue.readSeconds)}
-                onCommit={(raw) => {
-                  const trimmed = raw.trim();
-                  emit({
-                    type: "clueReadSeconds",
-                    catId: selCatId,
-                    row: sel.r,
-                    // Blank falls back to the board; an explicit 0 does not —
-                    // it is how you say "this one opens immediately" on a board
-                    // whose default is to wait.
-                    value: trimmed === "" ? null : Number(trimmed.replace(/[^0-9]/g, "")) || 0,
-                  });
-                }}
-                placeholder={`${boardReadSeconds} (BOARD DEFAULT)`}
-                style={{ ...input, flex: 1, fontFamily: mono, fontSize: 13 }}
-              />
-              <span style={{ fontFamily: mono, fontSize: 11, color: C.faint }}>SEC</span>
-            </div>
-            <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".1em", color: C.faint, marginTop: 4, lineHeight: 1.8 }}>
-              {selClue.media === "video"
-                ? "SET THIS TO THE CLIP'S LENGTH SO NOBODY BUZZES OVER IT."
-                : "TIME TO READ THE CLUE OUT BEFORE ANYONE CAN RING IN."}
-              <br />
-              THE HOST CAN ALWAYS OPEN THE BUZZERS EARLY.
-            </div>
-          </Field>
-
-          <div style={{ display: "flex", gap: 6 }}>
-            <button
-              onClick={() => {
-                const n = (selRound?.categories.length ?? 1) * ROWS;
-                const i = (sel.c * ROWS + sel.r - 1 + n) % n;
-                setSel({ round: roundIndex, c: Math.floor(i / ROWS), r: i % ROWS });
-              }}
-              style={{ ...btn, flex: 1 }}
-            >
-              ◀ PREV
-            </button>
-            <button
-              onClick={() => {
-                const n = (selRound?.categories.length ?? 1) * ROWS;
-                const i = (sel.c * ROWS + sel.r + 1) % n;
-                setSel({ round: roundIndex, c: Math.floor(i / ROWS), r: i % ROWS });
-              }}
-              style={{ ...btn, flex: 1 }}
-            >
-              NEXT ▶
-            </button>
-            <button onClick={() => emit({ type: "clueClear", catId: selCatId, row: sel.r })} style={{ ...btn, flex: 1, color: C.warn }}>
-              ✕ CLEAR
-            </button>
-          </div>
-
-          <div
-            style={{
-              marginTop: "auto",
-              fontFamily: mono,
-              fontSize: 10,
-              letterSpacing: ".13em",
-              color: C.faint,
-              lineHeight: 1.9,
-              borderTop: `1px solid ${C.lineSoft}`,
-              paddingTop: 12,
-            }}
-          >
-            {collaborative ? (
-              <>
-                SAVED CONTINUOUSLY · SHARE THIS PAGE&apos;S URL
-                <br />
-                TO EDIT TOGETHER. LOAD CODE <span style={{ color: C.accent }}>{slug}</span> IN THE HOST CONSOLE.
-              </>
-            ) : (
-              <>THIS DRAFT IS ONLY IN THIS BROWSER. SAVE &amp; SHARE TO PUT IT ON THE SERVER AND EDIT IT WITH OTHERS.</>
-            )}
-          </div>
-        </aside>
-      </div>
+      {toast}
     </main>
   );
 }
 
-/* ---------------------------------------------------------------- */
+/* ================================================================ */
+
+function capitalise(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
 
 /**
- * A text field backed by a value that other people can change underneath you.
- *
- * While it has focus it keeps its own buffer and ignores incoming values, so a
- * broadcast echo of your own keystrokes cannot fight your cursor. On blur it
- * snaps to whatever the server currently says, which is how you pick up an edit
- * someone else made to the same field while you were in it.
+ * A text field backed by a value other people can change underneath you.
+ * While focused it keeps its own buffer, so an echo of your own keystrokes
+ * cannot fight the cursor; on blur it snaps to whatever the server says.
  */
 function Synced({
   value,
   onCommit,
   multiline,
   style,
+  className,
   placeholder,
+  inputRef,
+  ariaLabel,
 }: {
   value: string;
   onCommit: (value: string) => void;
   multiline?: boolean;
   style?: React.CSSProperties;
+  className?: string;
   placeholder?: string;
+  inputRef?: React.Ref<HTMLTextAreaElement>;
+  ariaLabel?: string;
 }) {
   const [local, setLocal] = useState(value);
   const focused = useRef(false);
@@ -1176,6 +675,8 @@ function Synced({
     value: local,
     placeholder,
     style,
+    className,
+    "aria-label": ariaLabel,
     onFocus: () => {
       focused.current = true;
     },
@@ -1189,83 +690,788 @@ function Synced({
     },
   };
 
-  return multiline ? <textarea {...common} /> : <input {...common} />;
+  return multiline ? <textarea ref={inputRef} {...common} /> : <input {...common} />;
 }
 
-function Presence({ editors, you, connected }: { editors: EditorPresence[]; you: string; connected: boolean }) {
+/** A small progress ring for the readiness chip. */
+function Ring({ value }: { value: number }) {
+  const r = 7;
+  const len = 2 * Math.PI * r;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-      <span style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".16em", color: connected ? C.good : C.warn }}>
-        {connected ? "● LIVE" : "● OFFLINE"}
-      </span>
-      <div style={{ display: "flex", gap: 4 }}>
-        {editors.map((e) => (
-          <span
-            key={e.id}
-            title={e.id === you ? `${e.name} (you)` : e.name}
-            style={{
-              fontFamily: mono,
-              fontSize: 10,
-              letterSpacing: ".1em",
-              padding: "3px 7px",
-              color: C.onAccent,
-              background: e.color,
-              opacity: e.id === you ? 0.55 : 1,
-            }}
-          >
-            {e.name}
-            {e.id === you ? " (YOU)" : ""}
-          </span>
-        ))}
+    <svg width={18} height={18} viewBox="0 0 18 18" aria-hidden>
+      <circle cx={9} cy={9} r={r} fill="none" stroke={C.line} strokeWidth={2.5} />
+      <circle
+        cx={9}
+        cy={9}
+        r={r}
+        fill="none"
+        stroke={value >= 1 ? C.good : C.accent}
+        strokeWidth={2.5}
+        strokeDasharray={`${len * value} ${len}`}
+        strokeLinecap="round"
+        transform="rotate(-90 9 9)"
+      />
+    </svg>
+  );
+}
+
+function Banner({ tone, icon, children }: { tone: "warn" | "info"; icon: IconName; children: React.ReactNode }) {
+  const color = tone === "warn" ? C.warn : C.info;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "10px 16px",
+        fontSize: 14,
+        color,
+        background: alpha(color, 10),
+        borderBottom: `1px solid ${alpha(color, 30)}`,
+      }}
+    >
+      <Icon name={icon} size={16} />
+      <span>{children}</span>
+    </div>
+  );
+}
+
+function TabButton({
+  on,
+  onClick,
+  children,
+  color = C.accent,
+}: {
+  on: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  color?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="tap"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 7,
+        height: 32,
+        padding: "0 12px",
+        flex: "none",
+        borderRadius: "var(--r-btn)",
+        fontSize: 14,
+        fontWeight: 600,
+        color: on ? C.text : C.muted,
+        background: on ? alpha(color, 16) : "transparent",
+        boxShadow: on ? `inset 0 0 0 1px ${alpha(color, 45)}` : "none",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Presence({ editors, you }: { editors: EditorPresence[]; you: string }) {
+  const shown = editors.slice(0, 5);
+  return (
+    <div style={{ display: "flex", alignItems: "center" }} className="hide-sm">
+      {shown.map((e, i) => (
+        <span
+          key={e.id}
+          title={e.id === you ? `${e.name} (you)` : e.name}
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: "50%",
+            display: "grid",
+            placeItems: "center",
+            marginLeft: i ? -6 : 0,
+            fontSize: 12,
+            fontWeight: 700,
+            color: "#0b0d12",
+            background: e.color,
+            border: `2px solid ${C.panelDeep}`,
+          }}
+        >
+          {(e.name.trim()[0] ?? "?").toUpperCase()}
+        </span>
+      ))}
+      {editors.length > shown.length && (
+        <span className="chip" style={{ marginLeft: 4 }}>
+          +{editors.length - shown.length}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function SharePanel({
+  slug,
+  canEdit,
+  name,
+  onName,
+  notify,
+}: {
+  slug: string;
+  canEdit: boolean;
+  name: string;
+  onName: (v: string) => void;
+  notify: (t: string, tone?: "ok" | "error" | "info") => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, color: C.muted }}>Quiz code</div>
+          <div className="mono" style={{ fontSize: 24, fontWeight: 600, color: C.accent }}>
+            {slug}
+          </div>
+        </div>
+        <button className="btn btn-sm" onClick={() => copyText(slug, notify, "Code copied")}>
+          <Icon name="copy" size={15} /> Copy
+        </button>
+      </div>
+      <div className="hint">Any host can load this code to play your quiz.</div>
+      <div style={{ height: 1, background: C.lineSoft }} />
+      {canEdit && (
+        <button
+          className="menu-item"
+          onClick={() => copyText(linkWithKey(`/edit/${slug}`, keyFor("edit-key", slug)), notify, "Edit link copied — anyone with it can change this quiz")}
+        >
+          <Icon name="users" size={16} />
+          <span style={{ flex: 1 }}>Invite co-editors</span>
+          <Icon name="copy" size={14} />
+        </button>
+      )}
+      <button className="menu-item" onClick={() => copyText(`${location.origin}/edit/${slug}`, notify, "View-only link copied")}>
+        <Icon name="eye" size={16} />
+        <span style={{ flex: 1 }}>Copy view-only link</span>
+        <Icon name="copy" size={14} />
+      </button>
+      <div style={{ height: 1, background: C.lineSoft }} />
+      <Field label="Your name, as co-editors see it">
+        <input className="input" value={name} onChange={(e) => onName(e.target.value.slice(0, 24))} style={{ height: 38 }} />
+      </Field>
+    </div>
+  );
+}
+
+function CategoryHeader({
+  name,
+  canDelete,
+  first,
+  last,
+  onName,
+  onMove,
+  onDelete,
+}: {
+  name: string;
+  canDelete: boolean;
+  first: boolean;
+  last: boolean;
+  onName: (v: string) => void;
+  onMove: (dir: -1 | 1) => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className="shape"
+      style={{
+        position: "relative",
+        display: "flex",
+        alignItems: "center",
+        background: C.surface,
+        borderTop: `3px solid ${C.accent}`,
+        minHeight: 56,
+      }}
+    >
+      <Synced
+        value={name}
+        onCommit={onName}
+        placeholder="Category"
+        className="input input-ghost display"
+        style={{ height: "100%", minHeight: 52, textAlign: "center", fontSize: 15, padding: "0 30px 0 10px", borderRadius: 0 }}
+        ariaLabel="Category name"
+      />
+      <div style={{ position: "absolute", right: 2, top: "50%", transform: "translateY(-50%)" }}>
+        <Popover
+          width={190}
+          trigger={({ toggle }) => (
+            <button className="btn btn-ghost btn-icon btn-sm" onClick={toggle} aria-label="Category options" style={{ width: 26, height: 26 }}>
+              <Icon name="more" size={16} />
+            </button>
+          )}
+        >
+          {(close) => (
+            <>
+              <button className="menu-item" disabled={first} onClick={() => (onMove(-1), close())}>
+                <Icon name="chevronLeft" size={16} /> Move left
+              </button>
+              <button className="menu-item" disabled={last} onClick={() => (onMove(1), close())}>
+                <Icon name="chevronRight" size={16} /> Move right
+              </button>
+              <ConfirmButton className="menu-item danger" disabled={!canDelete} confirmLabel="Tap again to delete" onConfirm={() => (onDelete(), close())}>
+                <Icon name="trash" size={16} /> Delete category
+              </ConfirmButton>
+            </>
+          )}
+        </Popover>
       </div>
     </div>
   );
 }
 
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
+/** One grid row: the editable value in the gutter, then that row's cells. */
+function RowCells({
+  ri,
+  value,
+  roundIndex,
+  emit,
+  cells,
+}: {
+  ri: number;
+  value: number;
+  roundIndex: number;
+  emit: (op: BoardOp) => void;
+  cells: React.ReactNode[];
+}) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".22em", color: C.faint }}>{label}</div>
-      {children}
+    <>
+      <Synced
+        key={`${roundIndex}:${ri}`}
+        value={String(value)}
+        onCommit={(raw) => emit({ type: "value", round: roundIndex, row: ri, value: Number(raw.replace(/[^0-9-]/g, "")) || 0 })}
+        className="input input-ghost display num"
+        style={{ height: "100%", padding: 0, textAlign: "center", fontSize: 15, color: C.accent }}
+        ariaLabel={`Value for row ${ri + 1}`}
+      />
+      {cells}
+    </>
+  );
+}
+
+function Cell({
+  clue,
+  value,
+  active,
+  watchers,
+  onClick,
+}: {
+  clue: Clue;
+  value: number;
+  active: boolean;
+  watchers: EditorPresence[];
+  onClick: () => void;
+}) {
+  const ready = isReady(clue);
+  const started = isStarted(clue);
+  const ring = watchers[0]?.color ?? (active ? C.accent : "transparent");
+  return (
+    <button
+      onClick={onClick}
+      className="shape tap"
+      aria-label={`${value} — ${clue.t || "empty"}`}
+      aria-current={active}
+      style={{
+        position: "relative",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        padding: "9px 10px 9px 13px",
+        textAlign: "left",
+        overflow: "hidden",
+        minHeight: 0,
+        background: active ? alpha(C.accent, 10) : ready ? C.tile : C.panel,
+        boxShadow: `inset 0 0 0 ${active || watchers.length ? 2 : 1}px ${ring === "transparent" ? C.lineSoft : ring}`,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 3,
+          background: ready ? C.good : started ? C.warn : "transparent",
+        }}
+      />
+      <span style={{ display: "flex", alignItems: "center", gap: 5, color: C.muted, minHeight: 16 }}>
+        {clue.dd && <Icon name="zap" size={14} style={{ color: C.warn }} fill />}
+        {clue.media && <Icon name={MEDIA_ICON[clue.media]} size={14} style={{ color: C.info }} />}
+        {clue.timerOff && <span style={{ fontSize: 12, fontWeight: 700, color: C.warn }}>∞</span>}
+        <span style={{ flex: 1 }} />
+        {watchers.map((w) => (
+          <span key={w.id} className="dot" title={w.name} style={{ background: w.color }} />
+        ))}
+      </span>
+      <span
+        style={{
+          fontSize: 13,
+          lineHeight: 1.35,
+          color: clue.t.trim() || clue.media ? C.text : C.faint,
+          display: "-webkit-box",
+          WebkitLineClamp: 3,
+          WebkitBoxOrient: "vertical",
+          overflow: "hidden",
+        }}
+      >
+        {clue.t.trim() || (clue.media ? clue.mediaLabel?.trim() || `${capitalise(clue.media)} clue` : "Add clue")}
+      </span>
+    </button>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+
+function MediaPicker({
+  media,
+  mediaKey,
+  mediaLabel,
+  onUpload,
+  onYouTube,
+  onRemove,
+  onCaption,
+  uploading,
+  pct,
+  usage,
+  onError,
+}: {
+  media?: Media;
+  mediaKey?: string;
+  mediaLabel?: string;
+  onUpload: (file: File) => void;
+  onYouTube: (id: string) => void;
+  onRemove: () => void;
+  onCaption: (v: string) => void;
+  uploading: boolean;
+  pct: number;
+  usage: StorageUsage | null;
+  onError: (m: string) => void;
+}) {
+  const [youtube, setYoutube] = useState("");
+  const [over, setOver] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  if (media) {
+    return (
+      <div className="field">
+        <span className="label">Media</span>
+        {mediaKey ? (
+          <ClueMedia media={media} mediaKey={mediaKey} label={mediaLabel} height={150} border={C.line} />
+        ) : (
+          <div className="hint">Placeholder: {media}</div>
+        )}
+        <Synced value={mediaLabel ?? ""} onCommit={onCaption} placeholder="Caption (optional)" className="input" style={{ height: 38, fontSize: 14 }} />
+        <div style={{ display: "flex", gap: 6 }}>
+          <button className="btn btn-sm" onClick={() => fileRef.current?.click()} disabled={uploading} style={{ flex: 1 }}>
+            <Icon name="refresh" size={15} /> {uploading ? `${Math.round(pct * 100)}%` : "Replace"}
+          </button>
+          <button className="btn btn-sm btn-danger" onClick={onRemove} style={{ flex: 1 }}>
+            <Icon name="trash" size={15} /> Remove
+          </button>
+        </div>
+        <input ref={fileRef} type="file" accept="image/*,video/*,audio/*" hidden onChange={(e) => pick(e.target.files?.[0])} />
+      </div>
+    );
+  }
+
+  function pick(file?: File) {
+    if (fileRef.current) fileRef.current.value = "";
+    if (file) onUpload(file);
+  }
+
+  const nearlyFull = usage && usage.board / usage.boardLimit > 0.5;
+
+  return (
+    <div className="field">
+      <span className="label">Media</span>
+      <button
+        type="button"
+        onClick={() => fileRef.current?.click()}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setOver(true);
+        }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          pick(e.dataTransfer.files?.[0]);
+        }}
+        disabled={uploading}
+        style={{
+          position: "relative",
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 6,
+          padding: "16px 12px",
+          borderRadius: "var(--r-md)",
+          border: `1.5px dashed ${over ? C.accent : C.edgeSoft}`,
+          background: over ? alpha(C.accent, 8) : "transparent",
+          color: C.dim,
+          fontSize: 14,
+        }}
+      >
+        {uploading ? (
+          <>
+            <span style={{ fontWeight: 600, color: C.text }}>Uploading {Math.round(pct * 100)}%</span>
+            <span style={{ position: "absolute", left: 0, bottom: 0, height: 3, width: `${pct * 100}%`, background: C.accent }} />
+          </>
+        ) : (
+          <>
+            <Icon name="upload" size={20} />
+            <span>
+              <span style={{ color: C.text, fontWeight: 600 }}>Add a picture, video or sound</span>
+            </span>
+            <span className="hint">
+              Drop a file or click · up to {mediaLimitLabel()}
+              {nearlyFull && usage ? ` · ${formatBytes(usage.board)} of ${formatBytes(usage.boardLimit)} used` : ""}
+            </span>
+          </>
+        )}
+      </button>
+      <input ref={fileRef} type="file" accept="image/*,video/*,audio/*" hidden onChange={(e) => pick(e.target.files?.[0])} />
+      <form
+        style={{ display: "flex", gap: 6 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          const id = youTubeId(youtube);
+          if (!id) return onError("That doesn't look like a YouTube link");
+          onYouTube(id);
+          setYoutube("");
+        }}
+      >
+        <div style={{ position: "relative", flex: 1 }}>
+          <Icon name="youtube" size={16} style={{ position: "absolute", left: 12, top: 11, color: C.muted }} />
+          <input
+            className="input"
+            value={youtube}
+            onChange={(e) => setYoutube(e.target.value)}
+            placeholder="Or paste a YouTube link"
+            style={{ height: 38, paddingLeft: 36, fontSize: 14 }}
+          />
+        </div>
+        {youtube.trim() && (
+          <button className="btn btn-sm" type="submit" disabled={!youTubeId(youtube)} style={{ height: 38 }}>
+            Add
+          </button>
+        )}
+      </form>
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+/** Timer and read-delay overrides, folded away until they're wanted. */
+function Timing({
+  timerOff,
+  seconds,
+  readSeconds,
+  boardSeconds,
+  boardRead,
+  isVideo,
+  onTimerOff,
+  onSeconds,
+  onRead,
+}: {
+  timerOff: boolean;
+  seconds?: number;
+  readSeconds?: number;
+  boardSeconds: number;
+  boardRead: number;
+  isVideo?: boolean;
+  onTimerOff: (v: boolean) => void;
+  onSeconds: (v: number | null) => void;
+  onRead: (v: number | null) => void;
+}) {
+  const custom = timerOff || seconds !== undefined || readSeconds !== undefined;
+  const [open, setOpen] = useState(custom);
+  const summary = [
+    timerOff ? "No timer" : `${seconds ?? boardSeconds}s to answer`,
+    (readSeconds ?? boardRead) > 0 ? `${readSeconds ?? boardRead}s read time` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".16em", color: C.mutedDeep }}>{label}</div>
-      {children}
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{ display: "flex", alignItems: "center", gap: 12, minHeight: 40, textAlign: "left" }}
+      >
+        <Icon name="timer" size={18} style={{ color: custom ? C.accent : C.muted }} />
+        <span style={{ flex: 1 }}>
+          <span style={{ display: "block", fontSize: 14, fontWeight: 500 }}>Timing</span>
+          <span className="hint">{summary}</span>
+        </span>
+        <Icon name="chevronDown" size={16} style={{ color: C.muted, transform: open ? "rotate(180deg)" : "none", transition: "transform .16s" }} />
+      </button>
+      {open && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingLeft: 30 }}>
+          <SwitchRow label="Countdown" checked={!timerOff} onChange={(v) => onTimerOff(!v)} hint={timerOff ? "Buzzers stay open until you close the clue" : undefined} />
+          {!timerOff && (
+            <NumberField label="Seconds to answer" value={seconds} placeholder={boardSeconds} onChange={onSeconds} />
+          )}
+          <NumberField
+            label="Read time before buzzers open"
+            value={readSeconds}
+            placeholder={boardRead}
+            allowZero
+            onChange={onRead}
+            hint={isVideo ? "Set this to the clip's length" : undefined}
+          />
+        </div>
+      )}
     </div>
   );
 }
 
-const aside: React.CSSProperties = {
-  background: C.panelDeep,
-  borderRight: `1px solid ${C.lineSoft}`,
-  padding: 16,
-  display: "flex",
-  flexDirection: "column",
-  gap: 18,
-  overflow: "auto",
-};
+function NumberField({
+  label,
+  value,
+  placeholder,
+  onChange,
+  allowZero,
+  hint,
+}: {
+  label: string;
+  value?: number;
+  placeholder: number;
+  onChange: (v: number | null) => void;
+  allowZero?: boolean;
+  hint?: string;
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <div style={{ position: "relative" }}>
+        <Synced
+          value={value === undefined ? "" : String(value)}
+          onCommit={(raw) => {
+            const t = raw.trim();
+            const n = Number(t.replace(/[^0-9]/g, ""));
+            if (t === "") onChange(null);
+            else if (allowZero) onChange(n || 0);
+            else onChange(n || null);
+          }}
+          placeholder={`${placeholder} (default)`}
+          className="input num"
+          style={{ height: 38, fontSize: 14, paddingRight: 40 }}
+        />
+        <span style={{ position: "absolute", right: 12, top: 10, fontSize: 13, color: C.faint }}>sec</span>
+      </div>
+    </Field>
+  );
+}
 
-const input: React.CSSProperties = { width: "100%", padding: "9px 10px", fontSize: 13 };
+/* ---------------------------------------------------------------- */
 
-const btn: React.CSSProperties = {
-  padding: "9px 13px",
-  fontFamily: mono,
-  fontSize: 11,
-  letterSpacing: ".13em",
-  background: C.surface,
-  border: `1px solid ${C.edge}`,
-};
+function FinalEditor({
+  final,
+  boardSeconds,
+  boardRead,
+  emit,
+  onUpload,
+  uploading,
+  pct,
+  usage,
+  onError,
+}: {
+  final?: FinalClue;
+  boardSeconds: number;
+  boardRead: number;
+  emit: (op: BoardOp) => void;
+  onUpload: (f: File) => void;
+  uploading: boolean;
+  pct: number;
+  usage: StorageUsage | null;
+  onError: (m: string) => void;
+}) {
+  const f = final ?? { category: "", t: "", a: "" };
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+      <div>
+        <div className="display" style={{ fontSize: 28, color: C.special }}>
+          Final round
+        </div>
+        <div className="dim" style={{ marginTop: 4 }}>
+          Everyone with points wagers, then writes an answer on their phone. Leave it empty to skip.
+        </div>
+      </div>
+      <div className="card" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 18 }}>
+        <Field label="Category">
+          <Synced value={f.category} onCommit={(v) => emit({ type: "final", field: "category", value: v })} placeholder="Shown while players wager" className="input" />
+        </Field>
+        <Field label="Clue">
+          <Synced
+            multiline
+            value={f.t}
+            onCommit={(v) => emit({ type: "final", field: "t", value: v })}
+            placeholder="Revealed once every wager is in"
+            className="input"
+            style={{ height: 110, fontSize: 16 }}
+          />
+        </Field>
+        <Field label="Answer">
+          <Synced value={f.a} onCommit={(v) => emit({ type: "final", field: "a", value: v })} placeholder="What is…?" className="input" style={{ fontWeight: 600, color: C.info }} />
+        </Field>
+        <MediaPicker
+          media={f.media}
+          mediaKey={f.mediaKey}
+          mediaLabel={f.mediaLabel}
+          onUpload={onUpload}
+          onYouTube={(id) => emit({ type: "finalMedia", value: "youtube", key: id })}
+          onRemove={() => emit({ type: "finalMedia", value: null })}
+          onCaption={(v) => emit({ type: "final", field: "mediaLabel", value: v })}
+          uploading={uploading}
+          pct={pct}
+          usage={usage}
+          onError={onError}
+        />
+        <Timing
+          timerOff={!!f.timerOff}
+          seconds={f.seconds}
+          readSeconds={f.readSeconds}
+          boardSeconds={boardSeconds}
+          boardRead={boardRead}
+          onTimerOff={(v) => emit({ type: "finalTimerOff", value: v })}
+          onSeconds={(v) => emit({ type: "finalSeconds", value: v })}
+          onRead={(v) => emit({ type: "finalReadSeconds", value: v })}
+        />
+      </div>
+    </div>
+  );
+}
 
-const miniBtn: React.CSSProperties = {
-  padding: "4px 0",
-  fontFamily: mono,
-  fontSize: 10,
-  background: C.surfaceDeep,
-  border: `1px solid ${C.lineFaint}`,
-  color: C.dim,
-};
+/* ---------------------------------------------------------------- */
+
+function SettingsDrawer({
+  open,
+  onClose,
+  game,
+  roundIndex,
+  emit,
+  notify,
+  onRoundDeleted,
+  onBlank,
+}: {
+  open: boolean;
+  onClose: () => void;
+  game: Game;
+  roundIndex: number | null;
+  emit: (op: BoardOp) => void;
+  notify: (t: string, tone?: "ok" | "error" | "info") => void;
+  onRoundDeleted: () => void;
+  onBlank: () => void;
+}) {
+  const importRef = useRef<HTMLInputElement>(null);
+  const round = roundIndex === null ? null : game.rounds[roundIndex];
+
+  const download = () => {
+    const blob = new Blob([JSON.stringify(game, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${(game.title || "quiz").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  return (
+    <Drawer open={open} onClose={onClose} title="Settings">
+      <section style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div className="eyebrow">Every clue</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <Field label="Seconds to answer">
+            <Synced
+              value={String(game.timerSeconds ?? DEFAULT_CLUE_SECONDS)}
+              onCommit={(raw) => {
+                const n = Number(raw.replace(/[^0-9]/g, ""));
+                if (n) emit({ type: "boardSeconds", value: n });
+              }}
+              className="input num"
+            />
+          </Field>
+          <Field label="Read time">
+            <Synced
+              value={String(game.readSeconds ?? DEFAULT_READ_SECONDS)}
+              onCommit={(raw) => emit({ type: "boardReadSeconds", value: Number(raw.replace(/[^0-9]/g, "")) || 0 })}
+              className="input num"
+            />
+          </Field>
+        </div>
+        <div className="hint">Read time keeps buzzers shut while the clue is read out. Any clue can override both.</div>
+      </section>
+
+      {round && roundIndex !== null && (
+        <section style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="eyebrow">This round</div>
+          <Field label="Name">
+            <Synced key={`rn:${roundIndex}`} value={round.name} onCommit={(v) => emit({ type: "roundName", index: roundIndex, value: v })} className="input" />
+          </Field>
+          {roundIndex > 0 && (
+            <button className="btn" onClick={() => emit({ type: "roundDouble", index: roundIndex })}>
+              Set values to double the previous round
+            </button>
+          )}
+          {game.rounds.length > 1 && (
+            <ConfirmButton
+              className="btn btn-danger"
+              confirmLabel="Tap again to delete this round"
+              onConfirm={() => {
+                emit({ type: "roundDelete", index: roundIndex });
+                onRoundDeleted();
+              }}
+            >
+              <Icon name="trash" size={16} /> Delete round
+            </ConfirmButton>
+          )}
+        </section>
+      )}
+
+      <section style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="eyebrow">Backup</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn" style={{ flex: 1 }} onClick={download}>
+            <Icon name="download" size={16} /> Export
+          </button>
+          <button className="btn" style={{ flex: 1 }} onClick={() => importRef.current?.click()}>
+            <Icon name="upload" size={16} /> Import
+          </button>
+        </div>
+        <input
+          ref={importRef}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (!file) return;
+            try {
+              const parsed = parseGame(JSON.parse(await file.text()));
+              if (!parsed) throw new Error("That file isn't a quiz");
+              emit({ type: "replace", game: parsed });
+              notify("Quiz imported");
+              onClose();
+            } catch (err) {
+              notify((err as Error).message, "error");
+            }
+          }}
+        />
+        <div className="hint">Importing replaces everything in this quiz.</div>
+      </section>
+
+      <section style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="eyebrow">Start over</div>
+        <a className="btn" href="/edit">
+          <Icon name="plus" size={16} /> New quiz
+        </a>
+        <ConfirmButton className="btn btn-danger" confirmLabel="Tap again — this wipes every clue" onConfirm={onBlank}>
+          <Icon name="trash" size={16} /> Clear this quiz
+        </ConfirmButton>
+      </section>
+    </Drawer>
+  );
+}

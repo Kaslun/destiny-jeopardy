@@ -70,6 +70,15 @@ export const SCENE: Record<SceneToken, string> = {
 
 export const mono = "var(--font-mono)";
 export const display = "var(--font-display)";
+export const body = "var(--font-body)";
+
+/** Corner radii, set by the theme's corner style. */
+export const R = {
+  sm: "var(--r-sm)",
+  md: "var(--r-md)",
+  lg: "var(--r-lg)",
+  btn: "var(--r-btn)",
+} as const;
 
 /** The seat colour for the nth player. */
 export function tintFor(index: number): string {

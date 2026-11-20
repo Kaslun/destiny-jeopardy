@@ -2,9 +2,10 @@
 
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { alpha, C, mono, money, SCENE, tintFor } from "../../../lib/theme";
-import { TINT_COUNT } from "../../../lib/themes";
+import { alpha, C, money, tintFor } from "../../../lib/theme";
+import { DEFAULT_THEME_ID, TINT_COUNT } from "../../../lib/themes";
 import { Score } from "../../../components/Score";
+import { Icon, Mark, Splash } from "../../../components/ui";
 import { useRole } from "../../../lib/useRoom";
 import { useTheme } from "../../../lib/useTheme";
 import { readJson, writeJson } from "../../../lib/storage";
@@ -16,30 +17,28 @@ import { standings, type FinalEntry, type FinalPhase } from "../../../shared/pro
 interface Profile {
   name: string;
   cls: string;
-  /** Index into the theme's tints. */
   tint: number;
 }
 
-/** 1st, 2nd, 3rd, 4th … */
 function ordinal(n: number): string {
-  if (n % 100 >= 11 && n % 100 <= 13) return "TH";
-  return ["TH", "ST", "ND", "RD"][n % 10] ?? "TH";
+  if (n % 100 >= 11 && n % 100 <= 13) return "th";
+  return ["th", "st", "nd", "rd"][n % 10] ?? "th";
 }
 
 export default function PhoneBuzzer() {
   const room = String(useParams().room ?? "").toUpperCase();
   const [name, setName] = useState("");
   const [cls, setCls] = useState("");
-  const [tint, setTint] = useState(0);
   const [named, setNamed] = useState(false);
   const [draft, setDraft] = useState<Profile>({ name: "", cls: "", tint: 0 });
 
   // Restore a previous identity so a refresh mid-game doesn't ask again.
   useEffect(() => {
     const saved = readJson<Partial<Profile>>("player-name");
-    if (!saved) return; // first time here, or storage unavailable
-    // Colour was added after the fact, so a profile saved before it exists has
-    // no tint. Picking one at random beats defaulting everybody to the same.
+    if (!saved) {
+      setDraft((d) => ({ ...d, tint: Math.floor(Math.random() * TINT_COUNT) }));
+      return;
+    }
     const restored: Profile = {
       name: saved.name ?? "",
       cls: saved.cls ?? "",
@@ -47,391 +46,308 @@ export default function PhoneBuzzer() {
     };
     setName(restored.name);
     setCls(restored.cls);
-    setTint(restored.tint);
     setDraft(restored);
     setNamed(true);
   }, []);
 
-  // An empty name is left empty rather than defaulted here: the theme that
-  // decides what an unnamed player is called comes from the board, which
-  // arrives over this very connection. The room fills the blank instead.
   const { state, you, connected, error, send } = useRole(room, "player", name, cls);
+  const theme = useTheme(state?.game ? state.game.theme : DEFAULT_THEME_ID, state?.game?.style);
 
-  const theme = useTheme(state?.game?.theme);
-
-  // Phones only confirm your own actions — a room of them echoing the TV would
-  // be chaos. Vibration where it exists, a short tone otherwise.
+  // Phones only confirm your own actions; the TV is the room's speaker.
   const sound = useSound(true);
   const myBuzz = !!you && (state?.buzzes ?? []).some((b) => b.playerId === you);
   const iAmFirst = !!you && state?.buzzes?.[0]?.playerId === you;
   sound.useCueOn(myBuzz, "buzz");
   sound.useCueOn(iAmFirst, "correct");
 
-  // Distinct haptics: a thump when your buzz lands, a double tap when it turns
-  // out you were first. You can tell them apart without looking.
+  // A thump when your buzz lands, a double tap when you were first.
   useEffect(() => {
-    if (myBuzz && typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(55);
+    if (myBuzz && navigator.vibrate) navigator.vibrate(55);
   }, [myBuzz]);
   useEffect(() => {
-    if (iAmFirst && typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate([40, 60, 90]);
+    if (iAmFirst && navigator.vibrate) navigator.vibrate([40, 60, 90]);
   }, [iAmFirst]);
 
-  // Drives the ring that leaves the button on press.
   const [wave, setWave] = useState(0);
 
-  // Every hook must live above the early returns below. This screen returns
-  // early for the name gate, the standings and the lobby, so a hook placed
-  // after them runs on some renders and not others — which is React error #310.
+  // Every hook lives above the early returns below (React error #310).
   const final = state?.final ?? null;
   const finalTimer = useCountdown(
     final?.phase === "clue" && !final.writingClosed && state?.timed ? (state?.shownAt ?? null) : null,
     state?.timerSeconds ?? 30,
     state?.readSeconds ?? 0,
   );
-  // Drives the "buzzers open in…" state on the buzzer itself.
   const clueTimer = useCountdown(state?.shownAt ?? null, state?.timerSeconds ?? 20, state?.readSeconds ?? 0);
 
   const commitName = () => {
     const next: Profile = {
-      name: draft.name.trim().toUpperCase() || theme.copy.defaultPlayerName,
-      cls: draft.cls.trim().toUpperCase(),
+      name: draft.name.trim().slice(0, 24) || theme.copy.defaultPlayerName,
+      cls: draft.cls.trim(),
       tint: draft.tint,
     };
     setName(next.name);
     setCls(next.cls);
-    setTint(next.tint);
     setNamed(true);
     writeJson("player-name", next);
     send({ type: "rename", ...next });
   };
 
+  /* ---------------- join ---------------- */
   if (!named) {
     return (
       <Frame>
-        <div style={{ display: "flex", flexDirection: "column", gap: 22, width: "100%", maxWidth: 340 }}>
-          <div style={{ textAlign: "center" }}>
-            <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".3em", color: C.muted }}>JOINING ROOM</div>
-            <div style={{ fontFamily: mono, fontSize: 40, fontWeight: 600, letterSpacing: ".2em", color: C.accent }}>
-              {room}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            commitName();
+          }}
+          style={{ display: "flex", flexDirection: "column", gap: 22, width: "100%", maxWidth: 360 }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, textAlign: "center" }}>
+            <Mark mark={theme.mark} size={44} />
+            <div className="display" style={{ fontSize: 30 }}>
+              {state?.game?.title ?? theme.copy.appName}
             </div>
+            <span className="chip mono">Room {room}</span>
           </div>
+
           <input
+            className="input input-lg"
             value={draft.name}
             onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-            onKeyDown={(e) => e.key === "Enter" && commitName()}
-            placeholder="YOUR NAME"
+            placeholder="Your name"
             maxLength={24}
             autoFocus
-            style={{ padding: 16, fontSize: 20, fontWeight: 600, textAlign: "center", letterSpacing: ".05em" }}
+            autoComplete="nickname"
+            enterKeyHint="go"
+            style={{ height: 60, fontSize: 22, fontWeight: 700, textAlign: "center" }}
           />
-          {/* A theme that names its classes offers them as a choice; one that
-              does not falls back to free text. Typing "TITAN" correctly on a
-              phone keyboard, in a dark room, is not a thing to ask of anyone. */}
-          {theme.classes.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".24em", color: C.dim, textAlign: "center" }}>
-                {theme.copy.classLabel}
-              </div>
-              <div style={{ display: "flex", gap: 8 }}>
-                {theme.classes.map((option) => {
-                  const on = draft.cls === option;
-                  return (
-                    <button
-                      key={option}
-                      onClick={() => setDraft((d) => ({ ...d, cls: on ? "" : option }))}
-                      className="tap"
-                      style={{
-                        flex: 1,
-                        padding: "14px 6px",
-                        fontFamily: mono,
-                        fontSize: 11,
-                        letterSpacing: ".1em",
-                        fontWeight: 600,
-                        color: on ? C.onAccent : C.dim,
-                        background: on ? C.accent : C.surface,
-                        border: `1px solid ${on ? C.accent : C.edge}`,
-                      }}
-                    >
-                      {option}
-                    </button>
-                  );
-                })}
-              </div>
+
+          {theme.classes.length > 0 && (
+            <div className="seg" style={{ width: "100%" }}>
+              {theme.classes.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  aria-pressed={draft.cls.toLowerCase() === option.toLowerCase()}
+                  onClick={() => setDraft((d) => ({ ...d, cls: d.cls.toLowerCase() === option.toLowerCase() ? "" : option }))}
+                  style={{ height: 40 }}
+                >
+                  {option}
+                </button>
+              ))}
             </div>
-          ) : (
-            <input
-              value={draft.cls}
-              onChange={(e) => setDraft((d) => ({ ...d, cls: e.target.value }))}
-              onKeyDown={(e) => e.key === "Enter" && commitName()}
-              placeholder={`${theme.copy.classLabel} (OPTIONAL)`}
-              maxLength={24}
-              style={{ padding: 14, fontFamily: mono, fontSize: 12, textAlign: "center", letterSpacing: ".14em" }}
-            />
           )}
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".24em", color: C.dim, textAlign: "center" }}>
-              YOUR COLOUR
-            </div>
-            {/* This is the stripe beside your name on the TV all night, so it
-                is worth choosing rather than being handed by seat order. */}
-            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-              {Array.from({ length: TINT_COUNT }, (_, i) => (
+          <div style={{ display: "flex", gap: 10, justifyContent: "center" }} role="radiogroup" aria-label="Your colour">
+            {Array.from({ length: TINT_COUNT }, (_, i) => {
+              const on = draft.tint === i;
+              return (
                 <button
                   key={i}
-                  onClick={() => setDraft((d) => ({ ...d, tint: i }))}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
                   aria-label={`Colour ${i + 1}`}
+                  onClick={() => setDraft((d) => ({ ...d, tint: i }))}
                   className="tap"
                   style={{
                     width: 40,
                     height: 40,
-                    padding: 0,
+                    borderRadius: "50%",
                     background: tintFor(i),
-                    border: draft.tint === i ? `3px solid ${C.text}` : `1px solid ${C.edge}`,
-                    opacity: draft.tint === i ? 1 : 0.55,
+                    boxShadow: on ? `0 0 0 3px ${C.bg}, 0 0 0 5px ${tintFor(i)}` : "none",
+                    transform: on ? "scale(1.05)" : "none",
                   }}
                 />
-              ))}
-            </div>
+              );
+            })}
           </div>
-          <button
-            onClick={commitName}
-            style={{
-              padding: 18,
-              fontFamily: mono,
-              fontSize: 13,
-              fontWeight: 600,
-              letterSpacing: ".2em",
-              color: C.onAccent,
-              background: C.accent,
-              border: "none",
-            }}
-          >
+
+          <button type="submit" className="btn btn-primary btn-xl btn-block">
             {theme.copy.joinLabel}
           </button>
-        </div>
+        </form>
       </Frame>
     );
   }
 
-  const me = state?.players.find((p) => p.id === you) ?? null;
-  const open = state?.open ?? null;
-  const phase = state?.phase ?? "buzz";
-  const dd = state?.dd ?? null;
-  const ddMine = !!dd && dd.playerId === you;
-  const ddOwner = dd ? (state?.players.find((p) => p.id === dd.playerId) ?? null) : null;
-  const buzzes = state?.buzzes ?? [];
-  const myIndex = buzzes.findIndex((b) => b.playerId === you);
-  const spent = you ? (state?.spent ?? []).includes(you) : false;
-  const locked = state?.lockout === "first-only" && buzzes.length > 0 && myIndex === -1;
+  if (!state) return <Splash>{connected ? "Joining…" : "Connecting…"}</Splash>;
 
-  // A Daily Double belongs to one player; for everyone else the buzzer is dead.
-  // The clue is up but is still being read out. The server refuses buzzes for
-  // this whole stretch, so the button must genuinely be dead — but visibly
-  // counting down rather than merely disabled, or the phone reads as broken.
+  const me = state.players.find((p) => p.id === you) ?? null;
+  const myTint = tintFor(me?.tint ?? draft.tint);
+  const open = state.open;
+  const phase = state.phase;
+  const dd = state.dd;
+  const ddMine = !!dd && dd.playerId === you;
+  const ddOwner = dd ? (state.players.find((p) => p.id === dd.playerId) ?? null) : null;
+  const buzzes = state.buzzes;
+  const myIndex = buzzes.findIndex((b) => b.playerId === you);
+  const spent = you ? state.spent.includes(you) : false;
+  const locked = state.lockout === "first-only" && buzzes.length > 0 && myIndex === -1;
   const reading = clueTimer.waiting && !!open && phase === "buzz";
-  const canBuzz =
-    !!open && phase === "buzz" && !reading && !state?.resolved && myIndex === -1 && !spent && !locked && connected;
+  const canBuzz = !!open && phase === "buzz" && !reading && !state.resolved && myIndex === -1 && !spent && !locked && connected;
   const isFirst = phase === "buzz" ? myIndex === 0 : ddMine && phase === "live";
 
-  // The standings take over every phone, so nobody is staring at a dead buzzer
-  // while the room watches the reveal.
-  if (state?.results && you) {
+  /* ---------------- standings ---------------- */
+  if (state.results && you) {
     const mine = standings(state.players).find((s) => s.id === you);
     const out = state.results.order.slice(0, state.results.revealed).includes(you);
     const won = out && mine?.rank === 1;
     return (
-      <main
-        style={{
-          minHeight: "100dvh",
-          display: "grid",
-          placeItems: "center",
-          padding: "40px 22px",
-          textAlign: "center",
-          background: won
-            ? SCENE.winner
-            : SCENE.results,
-          transition: "background 1s var(--snap)",
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 20 }}>
-          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".32em", color: won ? C.accent : C.special }}>
-            FINAL STANDINGS
-          </div>
+      <Frame scene={won ? "winner" : "results"}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, textAlign: "center" }}>
           {out ? (
             <>
-              <div key="place" className="anim-pop" style={{ fontSize: 84, fontWeight: 700, lineHeight: 1, color: won ? C.accent : C.text }}>
+              {won && <Icon name="crown" size={40} style={{ color: C.accent }} fill />}
+              <div key="place" className="display anim-pop num" style={{ fontSize: 96, color: won ? C.accent : C.text }}>
                 {mine?.rank}
-                <span style={{ fontSize: 30 }}>{ordinal(mine?.rank ?? 0)}</span>
+                <span style={{ fontSize: 36 }}>{ordinal(mine?.rank ?? 0)}</span>
               </div>
-              <Score value={me?.score ?? 0} positiveColor={C.accent} style={{ fontFamily: mono, fontSize: 30, fontWeight: 600 }} />
-              <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".24em", color: won ? C.accent : C.muted, lineHeight: 2 }}>
-                {won ? "YOU WON" : "WATCH THE TV"}
-              </div>
+              <Score value={me?.score ?? 0} positiveColor={C.accent} style={{ fontSize: 28, fontWeight: 700 }} />
+              <div style={{ fontSize: 18, color: won ? C.accent : C.dim, fontWeight: 600 }}>{won ? "You won!" : "Nice game"}</div>
             </>
           ) : (
             <>
-              <div style={{ fontSize: 30, fontWeight: 700 }}>{me?.name ?? name}</div>
-              <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".24em", color: C.muted, lineHeight: 2.2 }}>
-                YOUR PLACE HASN&apos;T
-                <br />
-                BEEN CALLED YET
-              </div>
+              <div className="spinner" />
+              <div style={{ fontSize: 18, color: C.dim }}>Your place is coming up…</div>
             </>
           )}
         </div>
-      </main>
+      </Frame>
     );
   }
 
-  // Before the host starts, show that you're in and who else is here — a dead
-  // buzzer with no explanation reads as the app being broken.
-  if (state && !state.started) {
+  /* ---------------- lobby ---------------- */
+  if (!state.started) {
     return (
       <Frame>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 24, width: "100%", maxWidth: 340 }}>
-          <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".3em", color: C.muted }}>YOU&apos;RE IN</div>
-          <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: ".03em", textAlign: "center" }}>
-            {me?.name ?? name}
-          </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 20, width: "100%", maxWidth: 360, textAlign: "center" }}>
           <div
             style={{
-              width: "100%",
-              border: `1px solid ${C.line}`,
-              background: "rgba(255,255,255,.03)",
-              padding: 16,
-              display: "flex",
-              flexDirection: "column",
-              gap: 10,
+              width: 72,
+              height: 72,
+              borderRadius: "50%",
+              display: "grid",
+              placeItems: "center",
+              background: alpha(C.good, 16),
+              color: C.good,
             }}
           >
-            <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: C.faint }}>
-              IN THE ROOM · {state.players.length}
+            <Icon name="check" size={36} stroke={2.5} />
+          </div>
+          <div>
+            <div className="display" style={{ fontSize: 32 }}>
+              You&apos;re in!
             </div>
-            {state.players.map((p, i) => (
-              <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, opacity: p.connected ? 1 : 0.45 }}>
-                <span
-                  style={{ width: 8, height: 8, background: tintFor(p.tint ?? i), transform: "rotate(45deg)", flex: "none" }}
-                />
-                <span style={{ fontSize: 16, fontWeight: p.id === you ? 700 : 500 }}>
-                  {p.name}
-                  {p.id === you ? " (YOU)" : ""}
-                </span>
-              </div>
-            ))}
+            <div style={{ fontSize: 16, color: C.dim, marginTop: 6 }}>The game starts when the host is ready.</div>
           </div>
-          <button
-            onClick={() => setNamed(false)}
-            className="tap"
-            style={{
-              padding: "12px 18px",
-              fontFamily: mono,
-              fontSize: 11,
-              letterSpacing: ".16em",
-              background: C.surface,
-              border: `1px solid ${C.line}`,
-              color: C.dim,
-            }}
-          >
-            CHANGE MY NAME
+          <button className="chip tap" onClick={() => setNamed(false)} style={{ height: 40, padding: "0 16px", fontSize: 16, color: C.text }}>
+            <span className="dot" style={{ background: myTint, width: 12, height: 12 }} />
+            {me?.name ?? name}
+            <Icon name="edit" size={14} style={{ color: C.muted }} />
           </button>
-          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: C.muted, textAlign: "center", lineHeight: 2 }}>
-            WAITING FOR THE HOST
-            <br />
-            TO START THE GAME
-          </div>
+          {state.players.length > 1 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+              {state.players
+                .filter((p) => p.id !== you)
+                .map((p, i) => (
+                  <span key={p.id} className="chip" style={{ opacity: p.connected ? 1 : 0.45 }}>
+                    <span className="dot" style={{ background: tintFor(p.tint ?? i) }} />
+                    {p.name}
+                  </span>
+                ))}
+            </div>
+          )}
         </div>
       </Frame>
     );
   }
 
+  /* ---------------- final round ---------------- */
   if (final && you) {
-    const entry = final.entries[you] ?? null;
     return (
       <FinalScreen
         phase={final.phase}
-        entry={entry}
+        entry={final.entries[you] ?? null}
         score={me?.score ?? 0}
-        category={state?.game?.final?.category ?? ""}
-        clue={final.phase === "wager" ? "" : (state?.game?.final?.t ?? "")}
+        category={state.game?.final?.category ?? ""}
+        clue={final.phase === "wager" ? "" : (state.game?.final?.t ?? "")}
         writingClosed={final.writingClosed}
-        secondsLeft={
-          final.phase === "clue" && !final.writingClosed && state?.timed ? finalTimer.remaining : null
-        }
+        secondsLeft={final.phase === "clue" && !final.writingClosed && state.timed ? finalTimer.remaining : null}
         beingRevealed={final.phase === "reveal" ? final.order[final.revealIndex] === you : false}
         onWager={(wager) => send({ type: "setFinalWager", wager })}
         onResponse={(response) => send({ type: "setFinalResponse", response })}
+        onLock={() => send({ type: "lockFinal" })}
       />
     );
   }
 
+  /* ---------------- daily double wager ---------------- */
   if (phase === "wager" && dd) {
     return ddMine ? (
-      <WagerScreen
-        min={dd.min}
-        max={dd.max}
-        score={me?.score ?? 0}
-        onLock={(wager) => send({ type: "setWager", wager })}
-      />
+      <WagerScreen min={dd.min} max={dd.max} score={me?.score ?? 0} onLock={(wager) => send({ type: "setWager", wager })} />
     ) : (
-      <Frame>
-        <div style={{ textAlign: "center", display: "flex", flexDirection: "column", gap: 18, padding: "0 24px" }}>
-          <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".3em", color: C.warn }}>DAILY DOUBLE</div>
-          <div style={{ fontSize: 30, fontWeight: 700, lineHeight: 1.2 }}>{ddOwner?.name ?? "SOMEONE"}</div>
-          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".24em", color: C.muted, lineHeight: 2 }}>
-            IS CHOOSING A WAGER.
-            <br />
-            THIS ONE ISN&apos;T YOURS — SIT IT OUT.
+      <Frame scene="dailyDouble">
+        <div style={{ textAlign: "center", display: "flex", flexDirection: "column", gap: 12, alignItems: "center" }}>
+          <Icon name="zap" size={36} style={{ color: C.special }} fill />
+          <div className="display" style={{ fontSize: 28 }}>
+            Daily Double
           </div>
+          <div style={{ fontSize: 17, color: C.dim }}>{ddOwner?.name ?? "Someone"} is placing a bet</div>
         </div>
       </Frame>
     );
   }
 
-  // Between clues, whoever has control is told it is their turn. Everyone else
-  // is told whose it is, so the room does not have to ask out loud.
-  const iHaveControl = !!you && state?.control === you;
-  const controlName = state?.control ? (state.players.find((p) => p.id === state.control)?.name ?? null) : null;
+  /* ---------------- buzzer ---------------- */
+  const iHaveControl = !!you && state.control === you;
+  const controlName = state.control ? (state.players.find((p) => p.id === state.control)?.name ?? null) : null;
 
-  let hint = "WAIT FOR THE HOST TO OPEN A CLUE";
-  let hintColor = C.muted;
+  let hint = "Wait for the next clue";
+  let hintColor: string = C.dim;
   if (!open && controlName) {
-    hint = iHaveControl ? "YOUR PICK — CALL IT OUT" : `${controlName} PICKS NEXT`;
-    hintColor = iHaveControl ? C.accent : C.muted;
+    hint = iHaveControl ? "Your pick!" : `${controlName} picks next`;
+    hintColor = iHaveControl ? C.accent : C.dim;
   }
   if (!connected) {
-    hint = "RECONNECTING…";
+    hint = "Reconnecting…";
     hintColor = C.warn;
   } else if (phase === "live" && dd) {
-    hint = ddMine
-      ? `YOUR DAILY DOUBLE — YOU WAGERED ${money(dd.wager ?? 0)}`
-      : `DAILY DOUBLE · ${ddOwner?.name ?? "SOMEONE"} IS ANSWERING`;
-    hintColor = ddMine ? C.accent : C.muted;
+    hint = ddMine ? "Answer out loud!" : `${ddOwner?.name ?? "Someone"} is answering`;
+    hintColor = ddMine ? C.accent : C.dim;
   } else if (reading) {
-    hint = "LISTEN — BUZZERS OPEN IN A MOMENT";
+    hint = "Listen…";
     hintColor = C.info;
-  } else if (state?.resolved) {
-    hint = "THAT ONE'S SETTLED — ANSWER IS ON THE TV";
-    hintColor = C.muted;
+  } else if (state.resolved) {
+    hint = "The answer's on the TV";
   } else if (spent) {
-    hint = "YOU MISSED THIS ONE — SIT IT OUT";
+    hint = "You're out for this one";
     hintColor = C.warn;
   } else if (isFirst) {
-    hint = "YOU'RE UP — ANSWER OUT LOUD";
-    hintColor = C.accent;
+    hint = "You're up — answer out loud!";
+    hintColor = C.good;
   } else if (myIndex > 0) {
-    hint = `QUEUED · POSITION ${myIndex + 1}`;
+    hint = `You're #${myIndex + 1} in line`;
     hintColor = C.info;
   } else if (locked) {
-    hint = "SOMEONE BEAT YOU TO IT";
-    hintColor = C.muted;
+    hint = "Someone beat you to it";
   } else if (open) {
-    hint = "CLUE IS LIVE — HIT IT THE SECOND YOU KNOW";
-    hintColor = C.info;
+    hint = "Buzz when you know it";
+    hintColor = C.accent;
   }
 
+  const ring = isFirst ? C.good : reading ? C.info : canBuzz ? C.accent : C.line;
+  const face = isFirst
+    ? `radial-gradient(circle at 50% 30%, color-mix(in srgb, ${C.good}, white 30%), ${C.good})`
+    : canBuzz
+      ? `radial-gradient(circle at 50% 30%, ${C.accentSoft}, ${C.accent} 70%)`
+      : reading
+        ? `radial-gradient(circle at 50% 30%, ${alpha(C.info, 22)}, ${C.panel})`
+        : `radial-gradient(circle at 50% 30%, ${C.surface}, ${C.panelDeep})`;
+
   return (
-    <Frame first={isFirst}>
+    <Frame scene={isFirst ? "winner" : "landing"}>
       <header
         style={{
           position: "absolute",
@@ -440,49 +356,30 @@ export default function PhoneBuzzer() {
           right: 0,
           display: "flex",
           alignItems: "center",
-          gap: 12,
-          padding: "18px 22px",
-          borderBottom: "1px solid rgba(255,255,255,.08)",
+          gap: 10,
+          padding: "max(14px, env(safe-area-inset-top)) 16px 14px",
         }}
       >
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 17, fontWeight: 600, letterSpacing: ".04em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        <button
+          onClick={() => setNamed(false)}
+          className="tap"
+          style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, textAlign: "left" }}
+          aria-label="Change name or colour"
+        >
+          <span className="dot" style={{ background: myTint, width: 14, height: 14 }} />
+          <span className="truncate" style={{ fontSize: 18, fontWeight: 700 }}>
             {me?.name ?? name}
-          </div>
-          <button
-            onClick={() => setNamed(false)}
-            style={{ padding: 0, background: "none", border: "none", fontFamily: mono, fontSize: 9, letterSpacing: ".18em", color: C.dim }}
-          >
-            {cls || theme.copy.classFallback} · CHANGE
-          </button>
-        </div>
+          </span>
+        </button>
         <div style={{ flex: 1 }} />
-        <div style={{ textAlign: "right" }}>
-          <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".2em", color: C.dim }}>YOUR SCORE</div>
-          {/* Only ever your own — the rest of the room is on the big screen. */}
-          <Score
-            value={me?.score ?? 0}
-            positiveColor={C.accent}
-            style={{ fontFamily: mono, fontSize: 30, fontWeight: 600, lineHeight: 1.1 }}
-          />
-        </div>
+        <Score value={me?.score ?? 0} positiveColor={C.accent} style={{ fontSize: 28, fontWeight: 800, fontFamily: "var(--font-display)" }} />
       </header>
 
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 30, width: "100%" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 28, width: "100%" }}>
         <div
           key={hint}
           className="anim-pop"
-          style={{
-            fontFamily: mono,
-            fontSize: 11,
-            letterSpacing: ".26em",
-            color: hintColor,
-            textAlign: "center",
-            lineHeight: 1.9,
-            minHeight: 40,
-            padding: "0 20px",
-            transition: "color .2s var(--snap)",
-          }}
+          style={{ fontSize: 20, fontWeight: 700, color: hintColor, textAlign: "center", minHeight: 30, padding: "0 20px" }}
         >
           {hint}
         </div>
@@ -494,133 +391,81 @@ export default function PhoneBuzzer() {
           }}
           disabled={!canBuzz}
           className="tap"
+          aria-label="Buzz"
           style={{
             position: "relative",
             isolation: "isolate",
-            width: "min(74vw, 280px)",
+            width: "min(76vw, 300px)",
             aspectRatio: "1",
             borderRadius: "50%",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            userSelect: "none",
-            WebkitTapHighlightColor: "transparent",
-            border: `3px solid ${isFirst ? C.accentSoft : reading ? C.info : canBuzz ? C.dimmer : C.line}`,
-            // Armed-and-waiting is its own state, not a shade of "off": it has
-            // to look like something about to happen so the room stays ready
-            // for it rather than assuming the round has moved on.
-            background: isFirst
-              ? `radial-gradient(circle at 50% 35%, ${C.accentSoft}, ${C.accent})`
-              : reading
-                ? `radial-gradient(circle at 50% 35%, ${alpha(C.info, 22)}, ${C.panelDeep})`
-                : canBuzz
-                  ? `radial-gradient(circle at 50% 35%, ${C.edge}, ${C.surface})`
-                  : `radial-gradient(circle at 50% 35%, ${C.surfaceDeep}, ${C.panelDeep})`,
-            color: isFirst ? C.accentDeep : C.text,
+            display: "grid",
+            placeItems: "center",
+            border: `4px solid ${ring}`,
+            background: face,
+            color: isFirst || canBuzz ? C.onAccent : C.text,
+            boxShadow: canBuzz ? `0 18px 60px ${alpha(C.accent, 35)}` : isFirst ? `0 18px 60px ${alpha(C.good, 40)}` : "none",
             animation: canBuzz ? "pulseGlow 2.4s infinite" : undefined,
             opacity: 1,
+            cursor: canBuzz ? "pointer" : "default",
           }}
         >
-          {/* A ring that leaves the button each press — the press is felt even
-              when the room is loud and the screen is barely glanced at. */}
           {wave > 0 && (
             <span
               key={wave}
               aria-hidden
               style={{
                 position: "absolute",
-                inset: -3,
+                inset: -4,
                 borderRadius: "50%",
-                border: `3px solid ${isFirst ? C.accentSoft : C.info}`,
+                border: `4px solid ${isFirst ? C.good : C.accent}`,
                 animation: "shockwave .55s var(--snap) forwards",
                 pointerEvents: "none",
                 zIndex: -1,
               }}
             />
           )}
-          {/* Unmistakable at a glance that the button is dead — a greyed-out
-              circle alone reads as "maybe it's broken". A read delay gets a
-              number instead of a padlock: it is a countdown, not a refusal, and
-              the difference is what stops people jabbing at the screen. */}
-          {!canBuzz && !isFirst && !reading && (
-            <div style={{ fontSize: "clamp(26px,9vw,44px)", lineHeight: 1, opacity: 0.85 }}>🔒</div>
-          )}
-          <div
-            key={`${isFirst}-${myIndex}-${reading}`}
-            className="anim-pop"
+          <span
+            key={`${isFirst}-${myIndex}-${reading}-${canBuzz}`}
+            className="anim-pop display num"
             style={{
-              fontSize: reading ? "clamp(44px,18vw,88px)" : "clamp(28px,11vw,52px)",
-              fontWeight: 700,
-              letterSpacing: ".06em",
-              lineHeight: 1,
+              fontSize: reading ? "clamp(56px,20vw,96px)" : "clamp(34px,12vw,56px)",
               color: reading ? C.info : undefined,
-              fontVariantNumeric: "tabular-nums",
+              display: "grid",
+              placeItems: "center",
             }}
           >
-            {reading
-              ? clueTimer.waitRemaining
-              : phase === "live" && dd
-                ? ddMine
-                  ? money(dd.wager ?? 0)
-                  : "—"
-                : isFirst
-                  ? "IN"
-                  : myIndex > 0
-                    ? String(myIndex + 1)
-                    : "BUZZ"}
-          </div>
-          <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".24em", opacity: 0.72 }}>
-            {phase === "live" && dd
-              ? ddMine
-                ? "YOUR WAGER — ANSWER ALOUD"
-                : "NOT YOUR CLUE"
-              : isFirst
-                ? "YOU'RE FIRST"
-                : canBuzz
-                  ? "SLAM IT"
-                  : spent
-                    ? "LOCKED OUT"
-                    : "STANDBY"}
-          </div>
+            {reading ? (
+              clueTimer.waitRemaining
+            ) : phase === "live" && dd ? (
+              ddMine ? money(dd.wager ?? 0) : <Icon name="lock" size={44} style={{ opacity: 0.6 }} />
+            ) : isFirst ? (
+              "Go!"
+            ) : myIndex > 0 ? (
+              `#${myIndex + 1}`
+            ) : canBuzz ? (
+              "Buzz"
+            ) : (
+              <Icon name="lock" size={44} style={{ opacity: 0.45 }} />
+            )}
+          </span>
         </button>
 
-        {error && (
-          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".14em", color: C.warn, textAlign: "center", padding: "0 20px" }}>
-            {error.toUpperCase()}
-          </div>
-        )}
+        {error && <div style={{ fontSize: 14, color: C.warn, textAlign: "center", padding: "0 20px" }}>{error}</div>}
       </div>
 
       <div
-        style={{
-          position: "absolute",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          padding: "16px 22px 26px",
-          display: "flex",
-          justifyContent: "center",
-          gap: 10,
-          fontFamily: mono,
-          fontSize: 10,
-          letterSpacing: ".18em",
-          color: C.dimmer,
-        }}
+        className="mono"
+        style={{ position: "absolute", bottom: "max(16px, env(safe-area-inset-bottom))", left: 0, right: 0, textAlign: "center", fontSize: 12, color: C.faint }}
       >
-        ROOM {room} · {state?.players.filter((p) => p.connected).length ?? 0} CONNECTED
+        {room}
       </div>
     </Frame>
   );
 }
 
-/**
- * The final round on a phone: wager blind, then write an answer, then watch.
- *
- * Players who finished the board on zero or below get no entry, so they see a
- * spectator screen rather than a wager form.
- */
+/* ================================================================ */
+
+/** Final round on a phone: wager blind, write an answer, then watch. */
 function FinalScreen({
   phase,
   entry,
@@ -632,6 +477,7 @@ function FinalScreen({
   beingRevealed,
   onWager,
   onResponse,
+  onLock,
 }: {
   phase: FinalPhase;
   entry: FinalEntry | null;
@@ -643,364 +489,227 @@ function FinalScreen({
   beingRevealed: boolean;
   onWager: (wager: number) => void;
   onResponse: (response: string) => void;
+  onLock: () => void;
 }) {
-  const [wagerDraft, setWagerDraft] = useState("");
   const [answerDraft, setAnswerDraft] = useState("");
 
   const shell = (children: React.ReactNode) => (
-    <main
-      style={{
-        minHeight: "100dvh",
-        display: "grid",
-        placeItems: "center",
-        padding: "40px 20px",
-        background: beingRevealed
-          ? SCENE.winner
-          : SCENE.results,
-      }}
-    >
-      <div style={{ display: "flex", flexDirection: "column", gap: 20, width: "100%", maxWidth: 360 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".32em", color: C.special }}>FINAL ROUND</div>
+    <Frame scene={beingRevealed ? "winner" : "final"} top>
+      <div style={{ display: "flex", flexDirection: "column", gap: 18, width: "100%", maxWidth: 380 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.special }}>Final round</div>
           {category && (
-            <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: ".02em", lineHeight: 1.2 }}>{category}</div>
+            <div className="display" style={{ fontSize: 28, marginTop: 4 }}>
+              {category}
+            </div>
           )}
         </div>
         {children}
       </div>
-    </main>
+    </Frame>
   );
 
   if (!entry) {
     return shell(
-      <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: C.muted, lineHeight: 2.2 }}>
-        YOU FINISHED ON {money(score)}.
-        <br />
-        ONLY PLAYERS IN THE BLACK
-        <br />
-        PLAY THE FINAL ROUND.
+      <div style={{ fontSize: 17, color: C.dim, lineHeight: 1.5 }}>
+        You finished on {money(score)} — only players with points play the final. Watch the TV!
       </div>,
     );
   }
 
   if (phase === "wager") {
-    const parsed = Number(wagerDraft.replace(/[^0-9]/g, ""));
-    const value = wagerDraft.trim() === "" ? 0 : parsed;
-    const clamped = Math.max(0, Math.min(score, Number.isFinite(value) ? value : 0));
     return shell(
-      <>
-        <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1.2 }}>
-          {entry.wager === null ? "HOW MUCH ARE YOU RISKING?" : "WAGER LOCKED"}
-        </div>
-        <div
-          style={{
-            background: "rgba(255,255,255,.04)",
-            border: `1px solid ${alpha(C.special, 32)}`,
-            padding: 16,
-          }}
-        >
-          <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".22em", color: C.dim }}>YOUR SCORE</div>
-          <div style={{ fontFamily: mono, fontSize: 32, fontWeight: 600, color: C.accent }}>{money(score)}</div>
-        </div>
-
-        {entry.wager === null ? (
-          <>
-            <input
-              value={wagerDraft}
-              onChange={(e) => setWagerDraft(e.target.value.replace(/[^0-9]/g, ""))}
-              onKeyDown={(e) => e.key === "Enter" && onWager(clamped)}
-              inputMode="numeric"
-              placeholder="0"
-              autoFocus
-              style={{
-                padding: "16px 18px",
-                fontFamily: mono,
-                fontSize: 38,
-                fontWeight: 600,
-                textAlign: "center",
-                border: `2px solid ${C.special}`,
-                background: alpha(C.special, 8),
-              }}
-            />
-            <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".18em", color: C.faint, textAlign: "center" }}>
-              ANYTHING FROM 0 TO {money(score)}
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-              <button onClick={() => setWagerDraft("0")} style={quickBtn}>
-                NOTHING
-              </button>
-              <button onClick={() => setWagerDraft(String(Math.round(score / 2)))} style={quickBtn}>
-                HALF
-              </button>
-              <button
-                onClick={() => setWagerDraft(String(score))}
-                style={{ ...quickBtn, color: C.onAccent, background: C.special, border: "none" }}
-              >
-                ALL IN
-              </button>
-            </div>
-            <button
-              onClick={() => onWager(clamped)}
-              style={{
-                padding: 18,
-                fontFamily: mono,
-                fontSize: 13,
-                fontWeight: 600,
-                letterSpacing: ".2em",
-                color: C.onAccent,
-                background: C.text,
-                border: "none",
-              }}
-            >
-              LOCK IN {money(clamped)}
-            </button>
-          </>
-        ) : (
-          <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".2em", color: C.good, lineHeight: 2.2 }}>
-            YOU RISKED {money(entry.wager)}.
-            <br />
-            WAITING FOR THE OTHERS…
-          </div>
-        )}
-      </>,
+      entry.wager === null ? (
+        <Wager min={0} max={score} score={score} onLock={onWager} />
+      ) : (
+        <Done icon="check" title={`You bet ${money(entry.wager)}`} sub="Waiting for everyone else…" />
+      ),
     );
   }
 
   if (phase === "clue") {
+    const closed = writingClosed || entry.locked;
     return shell(
       <>
-        <div style={{ fontSize: 22, fontWeight: 500, lineHeight: 1.35 }}>{clue}</div>
+        <div style={{ fontSize: 22, fontWeight: 500, lineHeight: 1.4 }}>{clue}</div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: C.mutedDeep, flex: 1 }}>
-            YOUR RESPONSE
-          </div>
+          <span style={{ fontSize: 14, color: C.muted, flex: 1 }}>You bet {money(entry.wager ?? 0)}</span>
           {secondsLeft !== null && (
-            <div
-              className={secondsLeft <= 5 ? "anim-urgent" : undefined}
-              style={{
-                fontFamily: mono,
-                fontSize: 20,
-                fontWeight: 600,
-                fontVariantNumeric: "tabular-nums",
-                color: secondsLeft <= 5 ? C.accent : C.special,
-              }}
+            <span
+              className={`display num ${secondsLeft <= 5 ? "anim-urgent" : ""}`}
+              style={{ fontSize: 24, color: secondsLeft <= 5 ? C.warn : C.special }}
             >
               {secondsLeft}s
-            </div>
+            </span>
           )}
         </div>
-        <input
+        <textarea
+          className="input"
           value={answerDraft}
           onChange={(e) => {
             setAnswerDraft(e.target.value);
             onResponse(e.target.value);
           }}
-          placeholder={writingClosed ? "PENS DOWN" : "What is …?"}
+          placeholder={closed ? "Pens down" : "What is…?"}
           maxLength={200}
           autoFocus
-          disabled={writingClosed}
-          style={{
-            padding: "16px 18px",
-            fontSize: 20,
-            fontWeight: 600,
-            border: `2px solid ${writingClosed ? C.line : C.special}`,
-            opacity: writingClosed ? 0.6 : 1,
-          }}
+          disabled={closed}
+          rows={3}
+          style={{ fontSize: 20, fontWeight: 600, borderWidth: 2, borderColor: closed ? C.line : C.special }}
         />
-        <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".18em", color: writingClosed ? C.warn : C.faint, lineHeight: 2 }}>
-          {writingClosed ? "PENS DOWN · LOCKED IN" : "SAVED AS YOU TYPE"} · YOU RISKED {money(entry.wager ?? 0)}
-        </div>
+        {closed ? (
+          <div style={{ fontSize: 15, fontWeight: 600, color: C.good, display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="lock" size={16} />
+            {entry.locked ? "Locked in — watch the TV" : "Pens down — your answer is in"}
+          </div>
+        ) : (
+          <button className="btn btn-primary btn-xl btn-block" onClick={onLock} disabled={!answerDraft.trim()}>
+            <Icon name="lock" size={18} /> Lock in answer
+          </button>
+        )}
       </>,
     );
   }
 
-  // reveal / done
   return shell(
     <>
-      <div style={{ fontSize: 22, fontWeight: 500, lineHeight: 1.35 }}>{clue}</div>
+      <div style={{ fontSize: 18, lineHeight: 1.4, color: C.dim }}>{clue}</div>
       <div
+        className="card"
         style={{
-          border: `1px solid ${beingRevealed ? C.accent : C.line}`,
-          background: beingRevealed ? "rgba(240,196,105,.1)" : "rgba(255,255,255,.03)",
-          padding: 16,
+          padding: 18,
           display: "flex",
           flexDirection: "column",
-          gap: 8,
+          gap: 6,
+          borderColor: beingRevealed ? C.accent : C.lineSoft,
+          background: beingRevealed ? alpha(C.accent, 10) : C.panel,
         }}
       >
-        <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: C.mutedDeep }}>YOU WROTE</div>
-        <div style={{ fontSize: 20, fontWeight: 600 }}>{entry.response.trim() || "— nothing —"}</div>
-        <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em", color: C.special }}>
-          RISKED {money(entry.wager ?? 0)}
+        <div style={{ fontSize: 13, color: C.muted }}>You wrote</div>
+        <div style={{ fontSize: 22, fontWeight: 700 }}>{entry.response.trim() || "— nothing —"}</div>
+        <div className="num" style={{ fontSize: 14, color: C.special }}>
+          Bet {money(entry.wager ?? 0)}
         </div>
       </div>
       <div
         style={{
-          fontFamily: mono,
-          fontSize: 12,
-          letterSpacing: ".2em",
+          fontSize: 18,
+          fontWeight: 700,
           textAlign: "center",
-          lineHeight: 2.2,
           color: entry.judged === "correct" ? C.good : entry.judged === "wrong" ? C.warn : C.dim,
         }}
       >
         {entry.judged === "correct"
-          ? `CORRECT · NOW ON ${money(score)}`
+          ? `Correct! Now on ${money(score)}`
           : entry.judged === "wrong"
-            ? `MISSED · NOW ON ${money(score)}`
+            ? `Not quite — now on ${money(score)}`
             : beingRevealed
-              ? "YOU'RE BEING REVEALED NOW"
-              : "WATCH THE TV"}
+              ? "You're being revealed…"
+              : "Watch the TV"}
       </div>
     </>,
   );
 }
 
-/**
- * The wager screen. Bounds come from the server and the server clamps again on
- * receipt, so this only has to keep the player honest about what they're doing.
- */
-function WagerScreen({
-  min,
-  max,
-  score,
-  onLock,
-}: {
-  min: number;
-  max: number;
-  score: number;
-  onLock: (wager: number) => void;
-}) {
+/** Daily Double stake. Bounds come from the server, which clamps again. */
+function WagerScreen({ min, max, score, onLock }: { min: number; max: number; score: number; onLock: (w: number) => void }) {
+  return (
+    <Frame scene="dailyDouble" top>
+      <div style={{ display: "flex", flexDirection: "column", gap: 18, width: "100%", maxWidth: 380 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.special, fontWeight: 600 }}>
+          <Icon name="zap" size={18} fill /> Daily Double
+        </div>
+        <div className="display" style={{ fontSize: 32 }}>
+          How much will you bet?
+        </div>
+        <Wager min={min} max={max} score={score} onLock={onLock} />
+      </div>
+    </Frame>
+  );
+}
+
+/** The shared wager form: score, a big number field, quick picks, lock in. */
+function Wager({ min, max, score, onLock }: { min: number; max: number; score: number; onLock: (w: number) => void }) {
   const [draft, setDraft] = useState("");
   const parsed = Number(draft.replace(/[^0-9]/g, ""));
   const value = Number.isFinite(parsed) && draft.trim() !== "" ? parsed : min;
   const clamped = Math.max(min, Math.min(max, value));
   const outOfRange = draft.trim() !== "" && clamped !== value;
-
   const quick = (n: number) => () => setDraft(String(Math.max(min, Math.min(max, n))));
 
   return (
-    <main
-      style={{
-        minHeight: "100dvh",
-        display: "grid",
-        placeItems: "center",
-        padding: "40px 20px",
-        background: SCENE.results,
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onLock(clamped);
       }}
+      style={{ display: "flex", flexDirection: "column", gap: 12 }}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: 22, width: "100%", maxWidth: 360 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".32em", color: C.special }}>DAILY DOUBLE</div>
-          <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: ".02em", lineHeight: 1.15 }}>
-            HOW MUCH ARE YOU RISKING?
-          </div>
-        </div>
-
-        <div
-          style={{
-            background: "rgba(255,255,255,.04)",
-            border: `1px solid ${alpha(C.special, 32)}`,
-            padding: 18,
-            display: "flex",
-            flexDirection: "column",
-            gap: 4,
-          }}
-        >
-          <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".22em", color: C.dim }}>YOUR SCORE</div>
-          <div style={{ fontFamily: mono, fontSize: 34, fontWeight: 600, color: score < 0 ? C.warn : C.accent }}>
-            {money(score)}
-          </div>
-        </div>
-
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ""))}
-          onKeyDown={(e) => e.key === "Enter" && onLock(clamped)}
-          inputMode="numeric"
-          placeholder={String(min)}
-          autoFocus
-          style={{
-            padding: "18px 20px",
-            fontFamily: mono,
-            fontSize: 40,
-            fontWeight: 600,
-            letterSpacing: ".04em",
-            textAlign: "center",
-            border: `2px solid ${C.special}`,
-            background: alpha(C.special, 8),
-          }}
-        />
-
-        <div
-          style={{
-            fontFamily: mono,
-            fontSize: 10,
-            letterSpacing: ".18em",
-            color: outOfRange ? C.warn : C.faint,
-            textAlign: "center",
-          }}
-        >
-          {outOfRange
-            ? `OUT OF RANGE — WILL BE SET TO ${money(clamped)}`
-            : `BETWEEN ${money(min)} AND ${money(max)}`}
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-          <button onClick={quick(min)} style={quickBtn}>
-            MIN
-          </button>
-          <button onClick={quick(Math.round(max / 2))} style={quickBtn}>
-            HALF
-          </button>
-          <button onClick={quick(max)} style={{ ...quickBtn, color: C.onAccent, background: C.special, border: "none" }}>
-            ALL IN
-          </button>
-        </div>
-
-        <button
-          onClick={() => onLock(clamped)}
-          style={{
-            padding: 20,
-            fontFamily: mono,
-            fontSize: 14,
-            fontWeight: 600,
-            letterSpacing: ".22em",
-            color: C.onAccent,
-            background: C.text,
-            border: "none",
-          }}
-        >
-          LOCK IN {money(clamped)}
+      <div style={{ fontSize: 15, color: C.dim }}>
+        You have <b className="num" style={{ color: score < 0 ? C.warn : C.accent }}>{money(score)}</b>
+      </div>
+      <input
+        className="input display num"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ""))}
+        inputMode="numeric"
+        placeholder={String(min)}
+        autoFocus
+        style={{ height: 76, fontSize: 40, textAlign: "center", borderWidth: 2, borderColor: C.special }}
+      />
+      <div className="num" style={{ fontSize: 13, textAlign: "center", color: outOfRange ? C.warn : C.faint }}>
+        {outOfRange ? `Will be set to ${money(clamped)}` : `${money(min)} – ${money(max)}`}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+        <button type="button" className="btn btn-lg" onClick={quick(min)}>
+          Min
+        </button>
+        <button type="button" className="btn btn-lg" onClick={quick(Math.round(max / 2))}>
+          Half
+        </button>
+        <button type="button" className="btn btn-lg btn-special" onClick={quick(max)}>
+          All in
         </button>
       </div>
-    </main>
+      <button type="submit" className="btn btn-primary btn-xl btn-block num">
+        Lock in {money(clamped)}
+      </button>
+    </form>
   );
 }
 
-const quickBtn: React.CSSProperties = {
-  padding: "14px 0",
-  fontFamily: mono,
-  fontSize: 12,
-  letterSpacing: ".1em",
-  background: "rgba(255,255,255,.05)",
-  border: "1px solid rgba(255,255,255,.12)",
-};
+function Done({ icon, title, sub }: { icon: "check"; title: string; sub: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, textAlign: "center", padding: "20px 0" }}>
+      <Icon name={icon} size={36} style={{ color: C.good }} stroke={2.5} />
+      <div className="display num" style={{ fontSize: 26 }}>
+        {title}
+      </div>
+      <div style={{ color: C.dim }}>{sub}</div>
+    </div>
+  );
+}
 
-function Frame({ children, first }: { children: React.ReactNode; first?: boolean }) {
+function Frame({
+  children,
+  scene = "landing",
+  top = false,
+}: {
+  children: React.ReactNode;
+  scene?: "landing" | "winner" | "results" | "final" | "dailyDouble";
+  /** Align to the top — for screens with a keyboard coming up. */
+  top?: boolean;
+}) {
   return (
     <main
       style={{
         position: "relative",
         minHeight: "100dvh",
         display: "grid",
-        placeItems: "center",
-        padding: "90px 20px",
-        // The whole screen warms when you're first — visible from arm's length.
+        placeItems: top ? "start center" : "center",
+        padding: top ? "40px 20px" : "84px 20px",
         transition: "background .35s var(--snap)",
-        background: first
-          ? SCENE.winner
-          : SCENE.landing,
+        background: `var(--scene-${scene === "dailyDouble" ? "daily-double" : scene})`,
       }}
     >
       {children}

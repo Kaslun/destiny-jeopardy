@@ -2,7 +2,8 @@
 
 import { useParams } from "next/navigation";
 import { useEffect, useRef } from "react";
-import { alpha, C, mono, money, SCENE, tintFor } from "../../../lib/theme";
+import { alpha, C, money, tintFor } from "../../../lib/theme";
+import { Icon, Mark } from "../../../components/ui";
 import { Score } from "../../../components/Score";
 import { ClueMedia } from "../../../components/ClueMedia";
 import { Lobby } from "../../../components/Lobby";
@@ -12,8 +13,8 @@ import { useSound } from "../../../lib/sound";
 import { useCountdown } from "../../../lib/useCountdown";
 import { useRole } from "../../../lib/useRoom";
 import { useTheme } from "../../../lib/useTheme";
+import { DEFAULT_THEME_ID } from "../../../lib/themes";
 import { clueKey, roundOf, type RoomState } from "../../../shared/protocol";
-import type { Theme } from "../../../lib/themes";
 
 export default function TvBoard() {
   const room = String(useParams().room ?? "").toUpperCase();
@@ -21,7 +22,7 @@ export default function TvBoard() {
 
   // The board decides how the room looks. Applied as a side effect, so every
   // one of this component's several return paths is covered by one call.
-  const theme = useTheme(state?.game?.theme);
+  const theme = useTheme(state?.game ? state.game.theme : DEFAULT_THEME_ID, state?.game?.style);
 
   // The TV is the room's speaker — phones stay quiet apart from their own buzz.
   const sound = useSound(true);
@@ -159,13 +160,9 @@ export default function TvBoard() {
   const { game, players, used, open, buzzes, revealed, resolved, openedAt, shownAt, readSeconds, timerSeconds, phase, dd, control, final } =
     state;
 
-  // Everything on this screen is about one round at a time.
   const board = roundOf(game, state.round);
   if (!board) return <Waiting room={room} connected={connected} hasState />;
-
-  if (final) {
-    return <FinalBoard state={state} />;
-  }
+  if (final) return <FinalBoard state={state} />;
 
   const openClue = open ? board.categories[open.c]?.clues[open.r] : null;
   const byId = new Map(players.map((p) => [p.id, p]));
@@ -181,52 +178,26 @@ export default function TvBoard() {
         display: "flex",
         flexDirection: "column",
         padding: "clamp(16px,2vw,32px) clamp(20px,2.5vw,40px)",
-        gap: "clamp(14px,1.6vw,22px)",
-        background: SCENE.board,
+        gap: "clamp(12px,1.6vw,22px)",
+        background: "var(--scene-board)",
       }}
     >
-      <header style={{ display: "flex", alignItems: "center", gap: 24, flex: "none" }}>
-        <div
-          style={{
-            width: 52,
-            height: 52,
-            border: `2px solid ${C.accent}`,
-            transform: "rotate(45deg)",
-            display: "grid",
-            placeItems: "center",
-          }}
-        >
-          <div style={{ width: 18, height: 18, background: C.accent }} />
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {/* The round's own name, not the game's subtitle — this line is how
-              the room knows the money just doubled. */}
-          <div
-            style={{
-              fontFamily: mono,
-              fontSize: "clamp(10px,.85vw,14px)",
-              letterSpacing: ".32em",
-              color: C.dim,
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-            }}
-          >
-            <span>{board.name || game.subtitle || "ROUND 01"}</span>
+      <header style={{ display: "flex", alignItems: "center", gap: 18, flex: "none" }}>
+        <Mark mark={theme.mark} size={52} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+          <div className="display truncate" style={{ fontSize: "clamp(24px,2.4vw,42px)" }}>
+            {game.title}
+          </div>
+          <div style={{ fontSize: "clamp(13px,1vw,18px)", color: C.dim, display: "flex", gap: 10 }}>
+            <span>{board.name || `Round ${state.round + 1}`}</span>
             {game.rounds.length > 1 && (
-              <span style={{ color: C.accent }}>
-                {state.round + 1}/{game.rounds.length}
+              <span style={{ color: C.faint }}>
+                {state.round + 1} of {game.rounds.length}
               </span>
             )}
           </div>
-          <div style={{ fontSize: "clamp(24px,2.4vw,40px)", fontWeight: 700, letterSpacing: ".05em", lineHeight: 1 }}>
-            {game.title}
-          </div>
         </div>
         <div style={{ flex: 1 }} />
-        {/* Whose turn it is, on the screen the whole room is already looking
-            at. Board control has always been tracked; until now the only way
-            to know who had it was to remember who answered last. */}
         {!open && controlName && (
           <div
             key={control ?? ""}
@@ -235,34 +206,26 @@ export default function TvBoard() {
               display: "flex",
               alignItems: "center",
               gap: 12,
-              padding: "10px 20px",
-              background: alpha(C.accent, 12),
-              border: `1px solid ${C.accent}`,
+              padding: "10px 22px",
+              borderRadius: "var(--r-btn)",
+              background: alpha(C.accent, 14),
+              border: `1px solid ${alpha(C.accent, 60)}`,
             }}
           >
-            <span style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".24em", color: C.dim }}>PICKS NEXT</span>
-            <span style={{ fontSize: "clamp(15px,1.4vw,26px)", fontWeight: 700, color: C.accent }}>{controlName}</span>
+            <span style={{ fontSize: "clamp(13px,1vw,18px)", color: C.dim }}>Picks next</span>
+            <span style={{ fontSize: "clamp(16px,1.4vw,26px)", fontWeight: 800, color: C.accent }}>{controlName}</span>
           </div>
         )}
-        <Badge>
-          <span style={{ color: C.info }}>●</span> {players.filter((p) => p.connected).length} CONNECTED
-        </Badge>
-        <Badge>
-          ROOM <span style={{ color: C.accent }}>{room}</span>
-        </Badge>
+        <div className="mono" style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.dim, letterSpacing: ".14em" }}>
+          {room}
+        </div>
         <button
           onClick={() => sound.setMuted(!sound.muted)}
           title={sound.muted ? "Sound off" : "Sound on"}
-          style={{
-            padding: "10px 14px",
-            background: C.surfaceDeep,
-            border: `1px solid ${C.line}`,
-            fontFamily: mono,
-            fontSize: 13,
-            color: sound.muted ? C.faint : C.info,
-          }}
+          className="btn btn-ghost btn-icon"
+          style={{ color: sound.muted ? C.faint : C.dim }}
         >
-          {sound.muted ? "🔇" : "🔊"}
+          <Icon name={sound.muted ? "volumeOff" : "volume"} size={20} />
         </button>
       </header>
 
@@ -272,7 +235,7 @@ export default function TvBoard() {
           minHeight: 0,
           display: "grid",
           gridTemplateColumns: `repeat(${board.categories.length}, 1fr)`,
-          gap: 8,
+          gap: "clamp(6px,0.6vw,10px)",
         }}
       >
         {board.categories.map((cat, ci) => (
@@ -280,23 +243,24 @@ export default function TvBoard() {
             key={ci}
             style={{
               display: "grid",
-              gridTemplateRows: `clamp(52px,6vh,86px) repeat(${board.values.length}, 1fr)`,
-              gap: 8,
+              gridTemplateRows: `clamp(56px,9vh,104px) repeat(${board.values.length}, 1fr)`,
+              gap: "clamp(6px,0.6vw,10px)",
               minHeight: 0,
             }}
           >
             <div
+              className="shape"
               style={{
                 background: `linear-gradient(180deg,${C.surface},${C.panel})`,
                 border: `1px solid ${C.edgeSoft}`,
-                borderTop: `2px solid ${C.accent}`,
+                borderTop: `3px solid ${C.accent}`,
                 display: "grid",
                 placeItems: "center",
                 padding: "0 10px",
                 textAlign: "center",
               }}
             >
-              <div style={{ fontSize: "clamp(11px,1vw,21px)", fontWeight: 600, letterSpacing: ".1em", lineHeight: 1.15 }}>
+              <div className="display" style={{ fontSize: "clamp(14px,1.4vw,28px)", lineHeight: 1.12, overflowWrap: "anywhere" }}>
                 {cat.name || "—"}
               </div>
             </div>
@@ -305,27 +269,19 @@ export default function TvBoard() {
               return (
                 <div
                   key={ri}
+                  className="shape"
                   style={{
                     display: "grid",
                     placeItems: "center",
-                    background: spent ? C.panelDeep : `linear-gradient(180deg,${C.surface},${C.tile})`,
-                    border: `1px solid ${spent ? C.lineSoft : C.edge}`,
-                    clipPath: "polygon(0 0,100% 0,100% 76%,90% 100%,0 100%)",
+                    background: spent ? alpha(C.panelDeep, 70) : `linear-gradient(180deg,${C.surface},${C.tile})`,
+                    border: `1px solid ${spent ? C.lineSoft : C.edgeSoft}`,
+                    transition: "background .4s var(--snap)",
                   }}
                 >
-                  {spent ? (
+                  {!spent && (
                     <div
-                      className="anim-pop"
-                      style={{ width: 22, height: 22, border: `1px solid ${C.line}`, transform: "rotate(45deg)" }}
-                    />
-                  ) : (
-                    <div
-                      style={{
-                        fontSize: "clamp(20px,3vw,60px)",
-                        fontWeight: 700,
-                        color: C.accent,
-                        textShadow: `0 0 26px ${alpha(C.accent, 28)}`,
-                      }}
+                      className="display num"
+                      style={{ fontSize: "clamp(22px,3.2vw,64px)", color: C.accent, textShadow: `0 0 26px ${alpha(C.accent, 28)}` }}
                     >
                       {value}
                     </div>
@@ -341,54 +297,39 @@ export default function TvBoard() {
         style={{
           flex: "none",
           display: "grid",
-          gridTemplateColumns: `repeat(${Math.max(players.length, 1)}, 1fr)`,
-          gap: 10,
-          height: "clamp(72px,11vh,128px)",
+          gridTemplateColumns: `repeat(${Math.max(players.length, 1)}, minmax(0,1fr))`,
+          gap: "clamp(8px,0.8vw,12px)",
+          height: "clamp(64px,10vh,112px)",
         }}
       >
         {players.length === 0 && (
-          <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".2em", color: C.faint, alignSelf: "center" }}>
-            NOBODY HAS JOINED YET — PLAYERS GO TO /play/{room}
-          </div>
+          <div style={{ fontSize: 18, color: C.faint, alignSelf: "center" }}>Nobody has joined yet — scan the code in the lobby to play</div>
         )}
-        {players.map((p, i) => (
-          <div
-            key={p.id}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 14,
-              padding: "0 18px",
-              background: `linear-gradient(100deg,${C.panel},${C.panelDeep})`,
-              border: `1px solid ${C.line}`,
-              borderLeft: `4px solid ${tintFor(p.tint ?? i)}`,
-              opacity: p.connected ? 1 : 0.45,
-              clipPath: "polygon(0 0,100% 0,100% 74%,97% 100%,0 100%)",
-            }}
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-              <div
-                style={{
-                  fontSize: "clamp(13px,1.2vw,23px)",
-                  fontWeight: 600,
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
+        {players.map((p, i) => {
+          const picking = !open && p.id === control;
+          return (
+            <div
+              key={p.id}
+              className="shape"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 14,
+                padding: "0 clamp(12px,1.2vw,22px)",
+                background: picking ? alpha(C.accent, 10) : C.panel,
+                borderStyle: "solid",
+                borderWidth: "1px 1px 1px 5px",
+                borderColor: `${picking ? alpha(C.accent, 50) : C.line} ${picking ? alpha(C.accent, 50) : C.line} ${picking ? alpha(C.accent, 50) : C.line} ${tintFor(p.tint ?? i)}`,
+                opacity: p.connected ? 1 : 0.45,
+              }}
+            >
+              <div className="truncate" style={{ fontSize: "clamp(14px,1.3vw,26px)", fontWeight: 700, flex: 1 }}>
                 {p.name}
               </div>
-              <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: C.muted }}>
-                {p.cls || (p.connected ? theme.copy.classFallback : "AWAY")}
-              </div>
+              <Score value={p.score} style={{ fontFamily: "var(--font-display)", fontSize: "clamp(18px,2vw,40px)", fontWeight: 700 }} />
             </div>
-            <div style={{ flex: 1 }} />
-            <Score
-              value={p.score}
-              style={{ fontFamily: mono, fontSize: "clamp(16px,1.9vw,38px)", fontWeight: 600 }}
-            />
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* While a wager is being chosen the clue must not appear anywhere the
@@ -399,50 +340,22 @@ export default function TvBoard() {
           style={{
             position: "absolute",
             inset: 0,
-            background: SCENE.dailyDouble,
+            background: "var(--scene-daily-double)",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            gap: 30,
+            gap: "clamp(18px,3vh,36px)",
+            textAlign: "center",
           }}
         >
-          <div style={{ fontFamily: mono, fontSize: "clamp(12px,1.2vw,18px)", letterSpacing: ".4em", color: C.special }}>
-            {board.categories[open.c]?.name}
+          <div style={{ fontSize: "clamp(16px,1.5vw,26px)", color: C.special, fontWeight: 600 }}>{board.categories[open.c]?.name}</div>
+          <div className="display" style={{ fontSize: "clamp(56px,8vw,140px)", textShadow: `0 0 60px ${alpha(C.special, 45)}` }}>
+            Daily Double
           </div>
-          <div
-            style={{
-              fontSize: "clamp(46px,7vw,120px)",
-              fontWeight: 700,
-              letterSpacing: ".06em",
-              lineHeight: 1,
-              color: C.text,
-              textShadow: `0 0 60px ${alpha(C.special, 45)}`,
-            }}
-          >
-            DAILY DOUBLE
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-            <div style={{ width: 40, height: 40, border: `2px solid ${C.special}`, transform: "rotate(45deg)" }} />
-            <div style={{ fontSize: "clamp(24px,3vw,52px)", fontWeight: 600, letterSpacing: ".04em" }}>
-              {ddOwner?.name ?? "—"}
-            </div>
-          </div>
-          <div
-            style={{
-              fontFamily: mono,
-              fontSize: "clamp(11px,1vw,16px)",
-              letterSpacing: ".3em",
-              color: C.dim,
-              textAlign: "center",
-              lineHeight: 2.2,
-            }}
-          >
-            IS CHOOSING A WAGER
-            <br />
-            <span style={{ color: C.faint }}>
-              {money(dd.min)} — {money(dd.max)}
-            </span>
+          <div style={{ fontSize: "clamp(22px,2.4vw,42px)", fontWeight: 700 }}>{ddOwner?.name ?? "—"} is placing a bet</div>
+          <div className="num" style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.faint }}>
+            {money(dd.min)} – {money(dd.max)}
           </div>
         </div>
       )}
@@ -451,26 +364,15 @@ export default function TvBoard() {
         <div
           key={`${open.c}-${open.r}`}
           className="anim-clue"
-          style={{
-            position: "absolute",
-            inset: 0,
-            background: SCENE.clue,
-            display: "flex",
-            flexDirection: "column",
-          }}
+          style={{ position: "absolute", inset: 0, background: "var(--scene-clue)", display: "flex", flexDirection: "column" }}
         >
-          {/* One bar, two jobs. While the clue is being read it drains in the
-              "not yet" colour; when the buzzers open it restarts as the clue's
-              own clock. Keyed so each phase animates from full. */}
-          <div style={{ flex: "none", height: 4, background: C.lineSoft }}>
+          {/* One bar, two jobs: drains through the read delay, then restarts
+              as the clue's own clock once the buzzers open. */}
+          <div style={{ flex: "none", height: 6, background: C.lineSoft }}>
             {reading ? (
               <div
                 key={`read-${shownAt ?? 0}`}
-                style={{
-                  height: "100%",
-                  background: `linear-gradient(90deg,${C.info},${C.special})`,
-                  animation: `drain ${readSeconds}s linear forwards`,
-                }}
+                style={{ height: "100%", background: C.info, animation: `drain ${readSeconds}s linear forwards` }}
               />
             ) : (
               timed &&
@@ -487,82 +389,35 @@ export default function TvBoard() {
             )}
           </div>
 
-          <div
-            style={{
-              flex: "none",
-              display: "flex",
-              alignItems: "center",
-              gap: 18,
-              padding: "22px 40px",
-              borderBottom: `1px solid ${C.lineSoft}`,
-            }}
-          >
-            <div style={{ fontFamily: mono, fontSize: 15, letterSpacing: ".3em", color: C.accent }}>
+          <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 18, padding: "clamp(16px,2vw,28px) clamp(24px,3vw,48px)" }}>
+            <div className="display" style={{ fontSize: "clamp(16px,1.5vw,28px)", color: C.accent }}>
               {board.categories[open.c]?.name}
             </div>
-            <div style={{ fontFamily: mono, fontSize: 15, letterSpacing: ".3em", color: dd ? C.special : C.dim }}>
-              {dd ? `WAGER ${money(dd.wager ?? 0)}` : board.values[open.r]}
+            <div className="display num" style={{ fontSize: "clamp(16px,1.5vw,28px)", color: dd ? C.special : C.dim }}>
+              {dd ? `Bet ${money(dd.wager ?? 0)}` : board.values[open.r]}
             </div>
             <div style={{ flex: 1 }} />
             <div
-              // Pulses through the last five seconds, so the room feels the
-              // clock running out without staring at the number.
-              className={
-                !reading && !resolved && timed && !timeUp && timer.remaining <= 5 ? "anim-urgent" : undefined
-              }
+              className={`display num ${!reading && !resolved && timed && !timeUp && timer.remaining <= 5 ? "anim-urgent" : ""}`}
               style={{
-                fontFamily: mono,
-                fontSize: 28,
-                fontWeight: 600,
-                fontVariantNumeric: "tabular-nums",
+                fontSize: "clamp(26px,2.6vw,48px)",
                 transition: "color .2s var(--snap)",
-                color: reading
-                  ? C.info
-                  : resolved
-                    ? C.good
-                    : !timed
-                      ? C.dimmer
-                      : timeUp
-                        ? C.warn
-                        : timer.remaining <= 5
-                          ? C.accent
-                          : C.mutedDeep,
+                color: reading ? C.info : resolved ? C.good : !timed ? C.dimmer : timeUp ? C.warn : timer.remaining <= 5 ? C.accent : C.mutedDeep,
               }}
             >
-              {reading
-                ? `BUZZ IN ${timer.waitRemaining}s`
-                : resolved
-                  ? "ANSWERED"
-                  : !timed
-                    ? "∞"
-                    : timeUp
-                      ? "TIME"
-                      : `${timer.remaining}s`}
+              {reading ? "" : resolved ? <Icon name="check" size={40} stroke={3} /> : !timed ? "∞" : timeUp ? "Time!" : timer.remaining}
             </div>
-            {openClue.dd && (
-              <div
-                style={{
-                  fontFamily: mono,
-                  fontSize: 13,
-                  letterSpacing: ".26em",
-                  color: C.onAccent,
-                  background: C.warn,
-                  padding: "5px 12px",
-                }}
-              >
-                DAILY DOUBLE
-              </div>
-            )}
           </div>
 
-          <div style={{ flex: 1, display: "grid", gridTemplateColumns: "1fr 400px", minHeight: 0 }}>
+          <div style={{ flex: 1, display: "grid", gridTemplateColumns: "minmax(0,1fr) clamp(280px,26vw,440px)", minHeight: 0 }}>
             <div
               style={{
                 display: "flex",
                 flexDirection: "column",
                 justifyContent: "center",
-                gap: 36,
-                padding: "0 clamp(32px,5vw,90px)",
+                gap: "clamp(20px,3vh,40px)",
+                padding: "0 clamp(32px,5vw,96px) clamp(24px,4vh,56px)",
+                minHeight: 0,
               }}
             >
               {openClue.media && openClue.mediaKey && (
@@ -570,51 +425,38 @@ export default function TvBoard() {
                   media={openClue.media}
                   mediaKey={openClue.mediaKey}
                   label={openClue.mediaLabel}
-                  height="clamp(160px,34vh,420px)"
+                  height="clamp(160px,38vh,460px)"
                   autoPlay
                 />
               )}
-
               {openClue.media && !openClue.mediaKey && (
                 <div
+                  className="shape"
                   style={{
                     height: "clamp(140px,26vh,330px)",
                     display: "grid",
                     placeItems: "center",
                     border: `1px solid ${C.edgeSoft}`,
-                    background:
-                      `repeating-linear-gradient(135deg,${C.surface} 0px,${C.surface} 10px,${C.tile} 10px,${C.tile} 20px)`,
-                    fontFamily: mono,
-                    fontSize: 14,
-                    letterSpacing: ".26em",
-                    color: C.mutedDeep,
+                    background: `repeating-linear-gradient(135deg,${C.surface} 0px,${C.surface} 10px,${C.tile} 10px,${C.tile} 20px)`,
+                    fontSize: 20,
+                    color: C.muted,
                   }}
                 >
-                  {openClue.mediaLabel || `[ ${openClue.media.toUpperCase()} ]`}
+                  {openClue.mediaLabel || openClue.media}
                 </div>
               )}
-              {/* Media-only clues are a real thing — "what is this?" over a
-                  photograph. Rendering an em dash under the picture just looks
-                  like the text failed to load. */}
               {openClue.t.trim() && (
-                <div style={{ fontSize: "clamp(26px,3.6vw,66px)", fontWeight: 500, lineHeight: 1.24 }}>
+                <div style={{ fontFamily: "var(--font-display)", fontSize: "clamp(28px,3.8vw,72px)", fontWeight: 600, lineHeight: 1.2, textWrap: "balance" }}>
                   {openClue.t}
                 </div>
               )}
               {revealed && (
                 <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 18,
-                    borderTop: `1px solid ${C.edgeSoft}`,
-                    paddingTop: 24,
-                  }}
+                  className="anim-rise"
+                  style={{ display: "flex", alignItems: "baseline", gap: 18, flexWrap: "wrap", borderTop: `1px solid ${C.edgeSoft}`, paddingTop: 24 }}
                 >
-                  <div style={{ fontFamily: mono, fontSize: 13, letterSpacing: ".28em", color: C.dim }}>
-                    CORRECT RESPONSE
-                  </div>
-                  <div style={{ fontSize: "clamp(20px,2.3vw,42px)", fontWeight: 700, color: C.accent }}>
+                  <div style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.dim }}>Answer</div>
+                  <div className="display" style={{ fontSize: "clamp(24px,2.6vw,48px)", color: C.accent }}>
                     {openClue.a || "—"}
                   </div>
                 </div>
@@ -624,127 +466,74 @@ export default function TvBoard() {
             <div
               style={{
                 borderLeft: `1px solid ${C.lineSoft}`,
-                background: alpha(C.bg, 60),
+                background: alpha(C.bg, 50),
                 display: "flex",
                 flexDirection: "column",
-                padding: 32,
+                padding: "clamp(20px,2vw,36px)",
                 gap: 10,
               }}
             >
-              <div
-                style={{
-                  fontFamily: mono,
-                  fontSize: 12,
-                  letterSpacing: ".3em",
-                  color: reading ? C.info : C.muted,
-                  marginBottom: 12,
-                }}
-              >
-                {dd ? "ANSWERING" : reading ? "LISTEN…" : "BUZZ ORDER"}
-              </div>
-
-              {/* The whole point of the delay is that the room can see it is
-                  coming. A dead buzzer with no explanation reads as broken. */}
               {!dd && reading && (
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "26px 18px",
-                    border: `1px solid ${C.info}`,
-                    background: alpha(C.info, 8),
-                  }}
-                >
-                  <div
-                    style={{
-                      fontFamily: mono,
-                      fontSize: 56,
-                      fontWeight: 600,
-                      fontVariantNumeric: "tabular-nums",
-                      color: C.info,
-                    }}
-                  >
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                  <div className="display num" style={{ fontSize: "clamp(64px,7vw,128px)", color: C.info, lineHeight: 1 }}>
                     {timer.waitRemaining}
                   </div>
-                  <div
-                    style={{
-                      fontFamily: mono,
-                      fontSize: 11,
-                      letterSpacing: ".26em",
-                      color: C.dim,
-                      textAlign: "center",
-                      lineHeight: 2,
-                    }}
-                  >
-                    UNTIL BUZZERS OPEN
-                  </div>
+                  <div style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.dim }}>until you can buzz</div>
                 </div>
               )}
 
               {dd && (
                 <div
+                  className="shape"
                   style={{
                     display: "flex",
                     flexDirection: "column",
-                    gap: 8,
-                    padding: "18px 20px",
+                    gap: 6,
+                    padding: "20px 22px",
+                    borderRadius: "var(--r-lg)",
                     background: alpha(C.special, 12),
-                    border: `1px solid ${C.special}`,
-                    clipPath: "polygon(0 0,100% 0,100% 70%,95% 100%,0 100%)",
+                    border: `1px solid ${alpha(C.special, 55)}`,
                   }}
                 >
-                  <div style={{ fontSize: 26, fontWeight: 600 }}>{ddOwner?.name ?? "—"}</div>
-                  <div style={{ fontFamily: mono, fontSize: 14, letterSpacing: ".2em", color: C.special }}>
-                    RISKING {money(dd.wager ?? 0)}
-                  </div>
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em", color: C.faint, lineHeight: 1.9 }}>
-                    NOBODY ELSE MAY ANSWER
+                  <div style={{ fontSize: "clamp(22px,2vw,34px)", fontWeight: 800 }}>{ddOwner?.name ?? "—"}</div>
+                  <div className="num" style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.special, fontWeight: 600 }}>
+                    is betting {money(dd.wager ?? 0)}
                   </div>
                 </div>
               )}
 
-              {!dd && !reading && buzzes.length === 0 && (
-                <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".2em", color: C.faint, lineHeight: 2 }}>
-                  NOBODY IN YET
+              {!dd && !reading && buzzes.length === 0 && !resolved && (
+                <div style={{ flex: 1, display: "grid", placeItems: "center", fontSize: "clamp(16px,1.4vw,26px)", color: C.faint, textAlign: "center" }}>
+                  Buzz in on your phone!
                 </div>
               )}
-              {!dd && buzzes.map((b, i) => (
-                <div
-                  key={b.playerId}
-                  className="anim-row"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 16,
-                    padding: "14px 18px",
-                    background: i === 0 ? "rgba(240,196,105,.12)" : "rgba(255,255,255,.025)",
-                    border: `1px solid ${i === 0 ? C.accentDeep : C.line}`,
-                    clipPath: "polygon(0 0,100% 0,100% 70%,95% 100%,0 100%)",
-                    // Each entry lands after the one above it.
-                    animationDelay: `${i * 60}ms`,
-                  }}
-                >
+              {!dd &&
+                buzzes.map((b, i) => (
                   <div
+                    key={b.playerId}
+                    className="anim-row shape"
                     style={{
-                      fontFamily: mono,
-                      fontSize: 22,
-                      fontWeight: 600,
-                      color: i === 0 ? C.accent : C.dimmer,
-                      width: 28,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 16,
+                      padding: "clamp(12px,1.2vw,18px) clamp(14px,1.4vw,22px)",
+                      borderRadius: "var(--r-md)",
+                      background: i === 0 ? alpha(C.accent, 14) : C.panel,
+                      border: `1px solid ${i === 0 ? alpha(C.accent, 60) : C.line}`,
+                      animationDelay: `${i * 60}ms`,
                     }}
                   >
-                    {i + 1}
+                    <div className="display num" style={{ fontSize: "clamp(18px,1.6vw,30px)", color: i === 0 ? C.accent : C.faint, width: "1.4em" }}>
+                      {i + 1}
+                    </div>
+                    <div className="truncate" style={{ fontSize: "clamp(18px,1.6vw,30px)", fontWeight: 700, flex: 1 }}>
+                      {byId.get(b.playerId)?.name ?? "—"}
+                    </div>
+                    <div className="num" style={{ fontSize: "clamp(12px,1vw,18px)", color: C.muted }}>
+                      {(b.ms / 1000).toFixed(2)}s
+                    </div>
                   </div>
-                  <div style={{ fontSize: 22, fontWeight: 600, flex: 1 }}>
-                    {byId.get(b.playerId)?.name ?? "—"}
-                  </div>
-                  <div style={{ fontFamily: mono, fontSize: 14, color: C.muted }}>
-                    {(b.ms / 1000).toFixed(2)}s
-                  </div>
-                </div>
-              ))}
+                ))}
             </div>
           </div>
         </div>
@@ -755,11 +544,8 @@ export default function TvBoard() {
 }
 
 /**
- * The final round on the big screen.
- *
- * Wagers and written responses stay hidden until the host starts revealing, and
- * then only for players already stepped through — the whole point is that the
- * room finds out one at a time.
+ * The final round on the big screen. Wagers and responses stay hidden until the
+ * host starts revealing, then come out one player at a time.
  */
 function FinalBoard({ state }: { state: RoomState }) {
   const final = state.final!;
@@ -780,153 +566,118 @@ function FinalBoard({ state }: { state: RoomState }) {
         justifyContent: "center",
         gap: "clamp(18px,3vh,36px)",
         padding: "clamp(20px,4vh,56px)",
-        background: SCENE.final,
+        background: "var(--scene-final)",
+        textAlign: "center",
       }}
     >
-      <div style={{ fontFamily: mono, fontSize: "clamp(11px,1.1vw,17px)", letterSpacing: ".42em", color: C.special }}>
-        FINAL ROUND
-      </div>
-
-      <div
-        style={{
-          fontSize: "clamp(30px,4.6vw,78px)",
-          fontWeight: 700,
-          letterSpacing: ".04em",
-          textAlign: "center",
-          lineHeight: 1.1,
-          textShadow: `0 0 60px ${alpha(C.special, 40)}`,
-        }}
-      >
-        {clue?.category || "FINAL"}
+      <div style={{ fontSize: "clamp(16px,1.5vw,26px)", fontWeight: 600, color: C.special }}>Final round</div>
+      <div className="display" style={{ fontSize: "clamp(36px,5vw,88px)", textShadow: `0 0 60px ${alpha(C.special, 40)}` }}>
+        {clue?.category || "Final"}
       </div>
 
       {final.phase === "wager" && (
-        <div style={{ fontFamily: mono, fontSize: "clamp(11px,1vw,16px)", letterSpacing: ".28em", color: C.dim, lineHeight: 2.2, textAlign: "center" }}>
-          EVERYONE IS WAGERING
-          <br />
-          <span style={{ color: C.faint }}>
-            {final.order.filter((id) => final.entries[id].wager !== null).length} OF {final.order.length} LOCKED IN
-          </span>
+        <div style={{ fontSize: "clamp(16px,1.5vw,26px)", color: C.dim }}>
+          Place your bets ·{" "}
+          <span className="num" style={{ color: C.text, fontWeight: 700 }}>
+            {final.order.filter((id) => final.entries[id].wager !== null).length} of {final.order.length}
+          </span>{" "}
+          locked in
         </div>
       )}
 
       {final.phase === "clue" && clue?.mediaKey && clue.media && (
         <div style={{ width: "min(900px, 92%)" }}>
-          <ClueMedia
-            media={clue.media}
-            mediaKey={clue.mediaKey}
-            label={clue.mediaLabel}
-            height="clamp(140px,28vh,340px)"
-            autoPlay
-          />
+          <ClueMedia media={clue.media} mediaKey={clue.mediaKey} label={clue.mediaLabel} height="clamp(140px,28vh,340px)" autoPlay />
         </div>
       )}
 
-      {/* The clue owns the screen while people are writing. Once the reveal
-          starts it gives way to the correct response — the standings need the
-          room, and nobody is still reading the question. */}
       {final.phase === "clue" && (
-        <div
-          style={{
-            fontSize: "clamp(22px,3vw,54px)",
-            fontWeight: 500,
-            lineHeight: 1.3,
-            textAlign: "center",
-            maxWidth: "22ch",
-          }}
-        >
+        <div style={{ fontFamily: "var(--font-display)", fontSize: "clamp(24px,3.2vw,58px)", fontWeight: 600, lineHeight: 1.25, maxWidth: "24ch", textWrap: "balance" }}>
           {clue?.t}
         </div>
       )}
 
       {(final.phase === "reveal" || final.phase === "done") && (
         <div style={{ display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
-          <span style={{ fontFamily: mono, fontSize: "clamp(9px,.85vw,13px)", letterSpacing: ".3em", color: C.dim }}>
-            CORRECT RESPONSE
+          <span style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.dim }}>Answer</span>
+          <span className="display" style={{ fontSize: "clamp(22px,2.6vw,44px)", color: C.info }}>
+            {clue?.a}
           </span>
-          <span style={{ fontSize: "clamp(20px,2.4vw,40px)", fontWeight: 700, color: C.info }}>{clue?.a}</span>
         </div>
       )}
 
       {final.phase === "clue" && (
-        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
           <div
-            className={writing && state.timed && !timer.expired && timer.remaining <= 5 ? "anim-urgent" : undefined}
+            className={`display num ${writing && state.timed && !timer.expired && timer.remaining <= 5 ? "anim-urgent" : ""}`}
             style={{
-              fontFamily: mono,
-              fontSize: "clamp(24px,3.2vw,54px)",
-              fontWeight: 600,
-              fontVariantNumeric: "tabular-nums",
+              fontSize: "clamp(28px,3.4vw,60px)",
               color: !writing ? C.warn : timer.remaining <= 5 ? C.accent : C.special,
               transition: "color .3s var(--snap)",
             }}
           >
-            {!state.timed ? "∞" : !writing ? "PENS DOWN" : `${timer.remaining}s`}
+            {!state.timed ? "∞" : !writing ? "Pens down" : timer.remaining}
           </div>
-          <div style={{ fontFamily: mono, fontSize: "clamp(10px,.9vw,14px)", letterSpacing: ".26em", color: C.faint }}>
-            {final.order.filter((id) => final.entries[id].response.trim() !== "").length} OF {final.order.length} WRITTEN
+          <div className="num" style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.faint }}>
+            {final.order.filter((id) => final.entries[id].locked).length} of {final.order.length} locked in
           </div>
         </div>
       )}
 
       {(final.phase === "reveal" || final.phase === "done") && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "min(920px, 92%)" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, width: "min(960px, 94%)", textAlign: "left" }}>
           {final.order.map((id, i) => {
             const player = byId.get(id);
             const entry = final.entries[id];
             const shown = i < revealedSoFar || (i === final.revealIndex && entry.judged !== null);
             const active = final.phase === "reveal" && i === final.revealIndex;
+            const visible = shown || active;
             return (
               <div
                 key={id}
-                className={active ? "anim-row" : undefined}
+                className={`shape ${active ? "anim-row" : ""}`}
                 style={{
                   display: "flex",
                   alignItems: "center",
                   gap: 18,
-                  padding: "14px 20px",
-                  background: active ? "rgba(240,196,105,.12)" : "rgba(255,255,255,.03)",
-                  border: `1px solid ${active ? C.accent : C.line}`,
-                  opacity: shown || active ? 1 : 0.45,
+                  padding: "clamp(12px,1.4vh,18px) 22px",
+                  borderRadius: "var(--r-md)",
+                  background: active ? alpha(C.accent, 12) : C.panel,
+                  border: `1px solid ${active ? alpha(C.accent, 60) : C.line}`,
+                  opacity: visible ? 1 : 0.45,
                   transform: active ? "scale(1.015)" : "none",
-                  transition: "opacity .3s var(--snap), background .3s var(--snap), border-color .3s var(--snap), transform .2s var(--snap)",
+                  transition: "opacity .3s var(--snap), background .3s var(--snap), transform .2s var(--snap)",
                 }}
               >
-                <div style={{ fontSize: "clamp(15px,1.5vw,26px)", fontWeight: 600, width: "22%", minWidth: 0 }}>
+                <div className="truncate" style={{ fontSize: "clamp(15px,1.5vw,28px)", fontWeight: 700, width: "24%" }}>
                   {player?.name ?? "—"}
                 </div>
-                <div style={{ flex: 1, fontSize: "clamp(14px,1.4vw,24px)", minWidth: 0 }}>
-                  {shown || active ? entry.response.trim() || "— nothing —" : "…"}
+                <div className="truncate" style={{ flex: 1, fontSize: "clamp(14px,1.4vw,26px)" }}>
+                  {visible ? entry.response.trim() || "— nothing —" : "…"}
                 </div>
                 <div
+                  className="num"
                   style={{
-                    fontFamily: mono,
-                    fontSize: "clamp(12px,1.1vw,20px)",
+                    fontSize: "clamp(13px,1.2vw,22px)",
+                    fontWeight: 600,
                     color: entry.judged === "correct" ? C.good : entry.judged === "wrong" ? C.warn : C.special,
                     minWidth: 90,
                     textAlign: "right",
                   }}
                 >
-                  {entry.judged ? (entry.judged === "correct" ? "+" : "−") + money(entry.wager ?? 0) : shown || active ? money(entry.wager ?? 0) : "?"}
+                  {entry.judged ? (entry.judged === "correct" ? "+" : "−") + money(entry.wager ?? 0) : visible ? money(entry.wager ?? 0) : "?"}
                 </div>
                 <div
+                  className="display num"
                   style={{
-                    fontFamily: mono,
-                    fontSize: "clamp(13px,1.3vw,24px)",
-                    fontWeight: 600,
-                    // Masked until this place is called: an unrevealed score
-                    // column lets anyone read the finishing order straight off
-                    // the screen, which is the entire thing being built up to.
-                    color: !(shown || active)
-                      ? C.edge
-                      : (player?.score ?? 0) < 0
-                        ? C.warn
-                        : C.accent,
+                    fontSize: "clamp(16px,1.5vw,28px)",
+                    // Masked until called: the score column would give away the order.
+                    color: !visible ? C.edge : (player?.score ?? 0) < 0 ? C.warn : C.accent,
                     minWidth: 100,
                     textAlign: "right",
                   }}
                 >
-                  {shown || active ? money(player?.score ?? 0) : "—"}
+                  {visible ? money(player?.score ?? 0) : "—"}
                 </div>
               </div>
             );
@@ -935,32 +686,16 @@ function FinalBoard({ state }: { state: RoomState }) {
       )}
 
       {final.phase === "done" && (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-          <div style={{ fontFamily: mono, fontSize: "clamp(10px,.9vw,14px)", letterSpacing: ".3em", color: C.dim }}>
-            WINNER
-          </div>
-          <div
-            className="anim-dd"
-            style={{
-              position: "relative",
-              overflow: "hidden",
-              fontSize: "clamp(28px,3.6vw,60px)",
-              fontWeight: 700,
-              color: C.accent,
-              padding: "0 6px",
-            }}
-          >
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+          <Icon name="crown" size={36} style={{ color: C.accent }} fill />
+          <div className="display anim-dd" style={{ position: "relative", overflow: "hidden", fontSize: "clamp(32px,4vw,68px)", color: C.accent, padding: "0 8px" }}>
             {state.players.slice().sort((a, b) => b.score - a.score)[0]?.name ?? "—"}
-            {/* One slow pass of light across the winner's name. */}
             <span
               aria-hidden
               style={{
                 position: "absolute",
                 inset: 0,
                 background: "linear-gradient(105deg, transparent 35%, rgba(255,255,255,.5) 50%, transparent 65%)",
-                // `both`: hold the off-screen start during the delay and the
-                // off-screen end afterwards. Without it the band parks itself
-                // in the middle of the name once the sweep finishes.
                 animation: "sheen 1.6s var(--snap) .5s both",
               }}
             />
@@ -971,43 +706,15 @@ function FinalBoard({ state }: { state: RoomState }) {
   );
 }
 
-function Badge({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "10px 18px",
-        background: C.surfaceDeep,
-        border: `1px solid ${C.line}`,
-        fontFamily: mono,
-        fontSize: 13,
-        letterSpacing: ".2em",
-        color: C.dim,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
 function Waiting({ room, connected, hasState }: { room: string; connected: boolean; hasState: boolean }) {
   return (
-    <main
-      style={{
-        height: "100dvh",
-        display: "grid",
-        placeItems: "center",
-        background: SCENE.landing,
-      }}
-    >
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 22 }}>
-        <div style={{ width: 60, height: 60, border: `2px solid ${C.edge}`, transform: "rotate(45deg)" }} />
-        <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: ".05em", color: C.dim }}>
-          {!connected ? "CONNECTING…" : hasState ? "WAITING FOR THE HOST TO LOAD A GAME" : "JOINING ROOM…"}
+    <main style={{ height: "100dvh", display: "grid", placeItems: "center", background: "var(--scene-landing)" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 20 }}>
+        <div className="spinner" style={{ width: 44, height: 44, borderWidth: 4 }} />
+        <div style={{ fontSize: 28, fontWeight: 600, color: C.dim }}>
+          {!connected ? "Connecting…" : hasState ? "Waiting for the host to pick a quiz" : "Joining…"}
         </div>
-        <div style={{ fontFamily: mono, fontSize: 34, fontWeight: 600, letterSpacing: ".22em", color: C.accent }}>
+        <div className="mono" style={{ fontSize: 40, fontWeight: 600, letterSpacing: ".18em", color: C.accent }}>
           {room}
         </div>
       </div>

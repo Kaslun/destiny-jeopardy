@@ -205,6 +205,47 @@ export interface Game {
    * Absent means the board predates themes and keeps the original look.
    */
   theme?: string;
+  /**
+   * The author's own touches on top of the preset: colours, typeface, corner
+   * style and a mark for the logo slot. Every field is optional and anything
+   * left out comes from the preset, so an empty object is the preset exactly.
+   */
+  style?: BoardStyle;
+}
+
+/**
+ * Per-board style overrides. Kept deliberately small — a handful of choices a
+ * friend can make in a minute — and validated as plain data here, because the
+ * server stores it but has no business knowing which fonts the client ships.
+ */
+export interface BoardStyle {
+  /** Primary colour: values, buttons, the room code. `#rrggbb`. */
+  accent?: string;
+  /** Page background. Everything else is derived from it. `#rrggbb`. */
+  bg?: string;
+  /** Display typeface id, resolved against the client's font list. */
+  font?: string;
+  corners?: "sharp" | "cut" | "soft" | "round";
+  /** Whether headings are set in capitals. */
+  caps?: boolean;
+  /** One emoji or a couple of letters shown where the logo goes. */
+  mark?: string;
+}
+
+const HEX = /^#[0-9a-f]{6}$/i;
+const CORNERS = ["sharp", "cut", "soft", "round"] as const;
+
+export function parseStyle(raw: unknown): BoardStyle | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const s = raw as Record<string, unknown>;
+  const out: BoardStyle = {};
+  if (typeof s.accent === "string" && HEX.test(s.accent)) out.accent = s.accent.toLowerCase();
+  if (typeof s.bg === "string" && HEX.test(s.bg)) out.bg = s.bg.toLowerCase();
+  if (typeof s.font === "string" && /^[a-z0-9-]{1,32}$/.test(s.font)) out.font = s.font;
+  if (CORNERS.includes(s.corners as BoardStyle["corners"] & string)) out.corners = s.corners as BoardStyle["corners"];
+  if (typeof s.caps === "boolean") out.caps = s.caps;
+  if (typeof s.mark === "string" && s.mark.trim()) out.mark = [...s.mark.trim()].slice(0, 3).join("");
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Whether the buzzers are open yet, given the room's own clock. */
@@ -620,7 +661,7 @@ function parseRound(r: Partial<Round> | undefined, index: number): Round | null 
   if (!r || !Array.isArray(r.categories) || r.categories.length === 0) return null;
   return {
     id: typeof r.id === "string" && r.id ? r.id : newId(),
-    name: String(r.name ?? `ROUND ${String(index + 1).padStart(2, "0")}`),
+    name: String(r.name ?? `Round ${index + 1}`),
     values: parseValues(r.values),
     categories: r.categories.slice(0, MAX_CATS).map(parseCategory),
   };
@@ -690,6 +731,7 @@ export function parseGame(raw: unknown): Game | null {
     // the server has no business knowing what themes the client ships, and an
     // unknown id already resolves to the default on the way out.
     ...(typeof g.theme === "string" && /^[a-z0-9-]{1,32}$/.test(g.theme) ? { theme: g.theme } : {}),
+    ...(parseStyle(g.style) ? { style: parseStyle(g.style) } : {}),
   };
 }
 
@@ -710,6 +752,8 @@ export const MAX_CATS = 8;
 export type BoardOp =
   | { type: "meta"; field: "title" | "subtitle"; value: string }
   | { type: "theme"; value: string }
+  /** Replaces the whole style object. `null` clears every override. */
+  | { type: "style"; value: BoardStyle | null }
   | { type: "value"; round: number; row: number; value: number }
   /* ---- rounds ---- */
   | { type: "roundAdd" }
@@ -814,6 +858,15 @@ export function applyBoardOp(game: Game, op: BoardOp): Game {
     case "theme":
       return { ...game, theme: op.value };
 
+    case "style": {
+      // Validated here as well as on load, because this result is stored as-is.
+      const style = parseStyle(op.value);
+      const next = { ...game };
+      if (style) next.style = style;
+      else delete next.style;
+      return next;
+    }
+
     case "value":
       return withRound(op.round, (round) => {
         if (op.row < 0 || op.row >= round.values.length) return round;
@@ -835,9 +888,9 @@ export function applyBoardOp(game: Game, op: BoardOp): Game {
           // to retype a ladder you did not want than to build the usual one by
           // hand every time.
           blankRound(
-            `ROUND ${String(index + 1).padStart(2, "0")}`,
+            `Round ${index + 1}`,
             doubled(previous.values),
-            previous.categories.map(() => "NEW CATEGORY"),
+            previous.categories.map(() => "New category"),
           ),
         ],
       };
@@ -937,7 +990,7 @@ export function applyBoardOp(game: Game, op: BoardOp): Game {
       return withRound(op.round, (round) =>
         round.categories.length >= MAX_CATS
           ? round
-          : { ...round, categories: [...round.categories, blankCategory("NEW CATEGORY")] },
+          : { ...round, categories: [...round.categories, blankCategory("New category")] },
       );
 
     case "catDelete": {

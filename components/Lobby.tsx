@@ -1,15 +1,14 @@
 "use client";
 
 import { JoinPanel } from "./JoinPanel";
-import { C, mono, SCENE, tintFor } from "../lib/theme";
+import { Mark } from "./ui";
+import { C, tintFor } from "../lib/theme";
 import type { RoomState } from "../shared/protocol";
 import type { Theme } from "../lib/themes";
 
 /**
- * The TV before the game starts: how to get in, and who already has.
- *
- * Everything here is sized to be read and scanned from across a room, which is
- * the whole job — a lobby nobody can join from is just a waiting screen.
+ * The TV before the game starts: how to get in, and who already has. Sized to
+ * be read and scanned from across a room.
  */
 export function Lobby({ state, room, theme }: { state: RoomState; room: string; theme: Theme }) {
   const players = state.players;
@@ -22,31 +21,15 @@ export function Lobby({ state, room, theme }: { state: RoomState; room: string; 
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
-        padding: "clamp(20px,3vw,44px)",
-        gap: "clamp(16px,2.5vh,32px)",
-        background: SCENE.board,
+        padding: "clamp(24px,3.5vw,56px)",
+        gap: "clamp(16px,3vh,40px)",
+        background: "var(--scene-board)",
       }}
     >
-      <header style={{ display: "flex", alignItems: "center", gap: 20, flex: "none" }}>
-        <div
-          style={{
-            width: 44,
-            height: 44,
-            border: `2px solid ${C.accent}`,
-            transform: "rotate(45deg)",
-            display: "grid",
-            placeItems: "center",
-          }}
-        >
-          <div style={{ width: 15, height: 15, background: C.accent }} />
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          <div style={{ fontFamily: mono, fontSize: "clamp(9px,.8vw,13px)", letterSpacing: ".32em", color: C.dim }}>
-            {state.game ? "BOARD LOADED · WAITING TO START" : "WAITING FOR THE HOST TO LOAD A BOARD"}
-          </div>
-          <div style={{ fontSize: "clamp(20px,2vw,34px)", fontWeight: 700, letterSpacing: ".05em", lineHeight: 1 }}>
-            {title}
-          </div>
+      <header style={{ display: "flex", alignItems: "center", gap: 18, flex: "none" }}>
+        <Mark mark={theme.mark} size={56} />
+        <div className="display" style={{ fontSize: "clamp(26px,2.8vw,48px)" }}>
+          {title}
         </div>
       </header>
 
@@ -55,120 +38,49 @@ export function Lobby({ state, room, theme }: { state: RoomState; room: string; 
           flex: 1,
           minHeight: 0,
           display: "grid",
-          gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)",
-          gap: "clamp(20px,3vw,56px)",
+          gridTemplateColumns: "minmax(0,1.1fr) minmax(0,1fr)",
+          gap: "clamp(24px,4vw,72px)",
           alignItems: "center",
         }}
       >
         <div style={{ display: "grid", placeItems: "center" }}>
-          <JoinPanel room={room} size={260} />
+          <JoinPanel room={room} size={280} />
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: 0, height: "100%" }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12, flex: "none" }}>
-            <div style={{ fontFamily: mono, fontSize: "clamp(10px,.9vw,14px)", letterSpacing: ".3em", color: C.dim }}>
-              IN THE ROOM
-            </div>
-            <div style={{ fontFamily: mono, fontSize: "clamp(18px,1.8vw,30px)", fontWeight: 600, color: C.info }}>
-              {players.length}
-            </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 18, minHeight: 0, maxHeight: "100%" }}>
+          <div style={{ fontSize: "clamp(16px,1.4vw,24px)", color: C.dim }}>
+            {players.length === 0 ? "Waiting for players…" : `${players.length} ${players.length === 1 ? "player" : "players"} in`}
           </div>
-
-          {players.length === 0 ? (
-            <div
-              style={{
-                flex: 1,
-                display: "grid",
-                placeItems: "center",
-                border: `1px dashed ${C.line}`,
-                fontFamily: mono,
-                fontSize: "clamp(10px,.95vw,15px)",
-                letterSpacing: ".22em",
-                color: C.faint,
-                textAlign: "center",
-                lineHeight: 2.2,
-                padding: 20,
-              }}
-            >
-              SCAN THE CODE TO JOIN
-              <br />
-              NOBODY IS HERE YET
-            </div>
-          ) : (
-            <div
-              style={{
-                flex: 1,
-                minHeight: 0,
-                overflow: "auto",
-                display: "grid",
-                gridTemplateColumns: players.length > 6 ? "1fr 1fr" : "1fr",
-                gridAutoRows: "min-content",
-                gap: 10,
-                alignContent: "start",
-              }}
-            >
-              {players.map((p, i) => (
-                <div
-                  key={p.id}
-                  className="anim-row"
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 14,
-                    padding: "12px 18px",
-                    background: `linear-gradient(100deg,${C.panel},${C.panelDeep})`,
-                    border: `1px solid ${C.line}`,
-                    borderLeft: `4px solid ${tintFor(p.tint ?? i)}`,
-                    clipPath: "polygon(0 0,100% 0,100% 74%,97% 100%,0 100%)",
-                    opacity: p.connected ? 1 : 0.45,
-                    animationDelay: `${Math.min(i, 8) * 45}ms`,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 26,
-                      height: 26,
-                      border: `1px solid ${tintFor(p.tint ?? i)}`,
-                      transform: "rotate(45deg)",
-                      opacity: 0.6,
-                      flex: "none",
-                    }}
-                  />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div
-                      style={{
-                        fontSize: "clamp(15px,1.5vw,26px)",
-                        fontWeight: 600,
-                        letterSpacing: ".04em",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {p.name}
-                    </div>
-                    <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: C.muted }}>
-                      {p.connected ? p.cls || "READY" : "AWAY"}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <div
+            className="scroll"
+            style={{ display: "flex", flexWrap: "wrap", gap: "clamp(8px,0.8vw,14px)", alignContent: "flex-start", minHeight: 0 }}
+          >
+            {players.map((p, i) => (
+              <div
+                key={p.id}
+                className="anim-pop"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "clamp(10px,1vw,16px) clamp(16px,1.4vw,24px)",
+                  borderRadius: "var(--r-btn)",
+                  background: C.panel,
+                  border: `1px solid ${C.line}`,
+                  opacity: p.connected ? 1 : 0.45,
+                  animationDelay: `${Math.min(i, 8) * 40}ms`,
+                }}
+              >
+                <span style={{ width: 14, height: 14, borderRadius: "50%", background: tintFor(p.tint ?? i) }} />
+                <span style={{ fontSize: "clamp(18px,1.7vw,30px)", fontWeight: 700 }}>{p.name}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      <footer
-        style={{
-          flex: "none",
-          textAlign: "center",
-          fontFamily: mono,
-          fontSize: "clamp(10px,.9vw,14px)",
-          letterSpacing: ".28em",
-          color: C.faint,
-        }}
-      >
-        {state.game ? "THE HOST STARTS THE GAME WHEN EVERYONE IS IN" : "THE HOST IS STILL SETTING UP"}
+      <footer style={{ flex: "none", textAlign: "center", fontSize: "clamp(13px,1.1vw,18px)", color: C.faint }}>
+        {state.game ? "The game starts when the host is ready" : "The host is choosing a quiz"}
       </footer>
     </main>
   );

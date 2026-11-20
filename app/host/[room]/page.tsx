@@ -2,45 +2,38 @@
 
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { alpha, C, mono, money, tintFor } from "../../../lib/theme";
+import { alpha, C, money, tintFor } from "../../../lib/theme";
 import { Score } from "../../../components/Score";
 import { useRole } from "../../../lib/useRoom";
 import { useTheme } from "../../../lib/useTheme";
+import { DEFAULT_THEME_ID } from "../../../lib/themes";
 import { keyFor, linkWithKey } from "../../../lib/keys";
 import { loadBoard, myBoards, type BoardRef } from "../../../lib/boards";
 import { ClueMedia } from "../../../components/ClueMedia";
 import { JoinPanel } from "../../../components/JoinPanel";
+import { ConfirmButton, copyText, Icon, LiveDot, Mark, Popover, Splash, useToast } from "../../../components/ui";
 import { useCountdown } from "../../../lib/useCountdown";
-import { clueKey, parseGame, roundOf, standings, totalClues } from "../../../shared/protocol";
+import { clueKey, parseGame, roundOf, standings, totalClues, type Player, type RoomState } from "../../../shared/protocol";
+
+type Send = ReturnType<typeof useRole>["send"];
 
 export default function HostConsole() {
   const room = String(useParams().room ?? "").toUpperCase();
   const { state, connected, error, send } = useRole(room, "host");
-  // The console wears whatever the loaded board wears, so the host is looking
-  // at the same game the room is.
-  const theme = useTheme(state?.game?.theme);
-  const [paste, setPaste] = useState("");
-  const [code, setCode] = useState("");
-  const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
-  const [confirmReset, setConfirmReset] = useState(false);
-  const [confirmClose, setConfirmClose] = useState(false);
-  /** Player id whose kick button is armed. Empty when none is. */
-  const [confirmKick, setConfirmKick] = useState("");
-  // The host sits next to the TV, so this screen stays silent unless asked.
+  const theme = useTheme(state?.game ? state.game.theme : DEFAULT_THEME_ID, state?.game?.style);
+  const [toast, notify] = useToast();
   const timer = useCountdown(state?.shownAt ?? null, state?.timerSeconds ?? 20, state?.readSeconds ?? 0);
 
-  // The boards this browser has made. Read once on mount — `localStorage` is
-  // not available during the server render.
   const [myBoardList, setMyBoardList] = useState<BoardRef[]>([]);
   useEffect(() => setMyBoardList(myBoards()), []);
 
+  useEffect(() => {
+    if (error) notify(error[0].toUpperCase() + error.slice(1), "error");
+  }, [error, notify]);
+
   /**
-   * `?board=CODE`, sent by the editor's "start a game" button.
-   *
-   * Waits for the socket, because loading a board is a message to the room and
-   * there is nothing to send it down yet on the first render. Guarded so it
-   * fires once: `connected` flaps on every reconnect, and re-sending `setGame`
-   * would silently wipe the scores of a game already in progress.
+   * `?board=CODE` from the editor's Play button. Waits for the socket, and
+   * fires once: re-sending `setGame` on a reconnect would wipe the scores.
    */
   const preload = useSearchParams().get("board");
   const preloaded = useRef(false);
@@ -48,1298 +41,961 @@ export default function HostConsole() {
     if (!preload || preloaded.current || !connected) return;
     preloaded.current = true;
     void loadByCode(preload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preload, connected]);
 
-  const loadByCode = async (which?: string) => {
-    const slug = (which ?? code).trim().toUpperCase();
+  async function loadByCode(which: string) {
+    const slug = which.trim().toUpperCase();
     if (!slug) return;
     try {
       const game = await loadBoard(slug);
       send({ type: "setGame", game });
-      const rounds = game.rounds.length;
-      setNote({
-        text: `LOADED ${slug} · ${game.rounds[0].categories.length} CATEGORIES${rounds > 1 ? ` · ${rounds} ROUNDS` : ""}`,
-        ok: true,
-      });
+      notify(`Loaded “${game.title}”`);
     } catch (err) {
-      setNote({ text: (err as Error).message.toUpperCase(), ok: false });
+      notify((err as Error).message.replace(/^./, (c) => c.toUpperCase()), "error");
     }
-  };
-
-  const loadGame = () => {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(paste);
-    } catch (err) {
-      setNote({ text: `NOT VALID JSON · ${(err as Error).message.toUpperCase()}`, ok: false });
-      return;
-    }
-    const game = parseGame(raw);
-    if (!game) {
-      setNote({ text: 'NEEDS A NON-EMPTY "CATEGORIES" ARRAY', ok: false });
-      return;
-    }
-    send({ type: "setGame", game });
-    setNote({ text: `LOADED · ${game.rounds[0].categories.length} CATEGORIES`, ok: true });
-    setPaste("");
-  };
-
-  if (!state) {
-    return <Shell room={room}>{connected ? "JOINING ROOM…" : "CONNECTING…"}</Shell>;
   }
 
-  const { game, players, used, open, buzzes, revealed, resolved, lockout, phase, dd, control, final, started, results } =
-    state;
-  // While this is true the room cannot buzz — the clue is still being read.
-  const reading = timer.waiting && phase === "buzz" && !!open;
-  const byId = new Map(players.map((p) => [p.id, p]));
-  // The board in play. Everything below addresses this round, never the game.
+  if (!state) return <Splash>{connected ? "Opening room…" : "Connecting…"}</Splash>;
+
+  const { game, players, used, open, final, started, results } = state;
   const board = roundOf(game, state.round);
-  const openClue = open && board ? board.categories[open.c]?.clues[open.r] : null;
-  // Counted for this round only — "12 clues left" across a whole game would be
-  // a number the host cannot act on.
   const roundClues = totalClues(board);
   const roundUsed = used.filter((k) => k.startsWith(`${state.round}-`)).length;
-  const ddOwner = dd ? (byId.get(dd.playerId) ?? null) : null;
-  // On a Daily Double the stake replaces the tile value in every ruling.
-  const atStake = dd?.wager ?? (open && board ? board.values[open.r] : 0);
+  const inviteUrl = typeof window !== "undefined" ? `${window.location.origin}/play/${room}` : "";
+
+  let body: React.ReactNode;
+  if (!game) body = <PickQuiz boards={myBoardList} onLoad={loadByCode} onFile={(g) => send({ type: "setGame", game: g })} notify={notify} />;
+  else if (results) body = <ResultsControl state={state} send={send} />;
+  else if (final && game.final) body = <FinalControl state={state} send={send} />;
+  else if (!started) body = <LobbyControl state={state} room={room} send={send} notify={notify} />;
+  else if (open) body = <ClueControl state={state} send={send} timer={timer} />;
+  else body = <BoardControl state={state} send={send} />;
 
   return (
-    <main style={{ minHeight: "100dvh", display: "flex", flexDirection: "column" }}>
+    <main style={{ minHeight: "100dvh", display: "flex", flexDirection: "column", background: C.bg }}>
       <header
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 14,
-          padding: "16px 22px",
+          gap: 10,
+          padding: "10px 14px",
           borderBottom: `1px solid ${C.lineSoft}`,
+          background: C.panelDeep,
           flexWrap: "wrap",
         }}
       >
-        <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: ".1em" }}>HOST CONSOLE</div>
-        <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".2em", color: C.muted }}>
-          {roundClues - roundUsed} / {roundClues} CLUES LEFT
-        </div>
-        <div style={{ flex: 1 }} />
-        <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em", color: connected ? C.good : C.warn }}>
-          {connected ? "● LIVE" : "● OFFLINE"}
-        </div>
-        <a href={`/tv/${room}`} target="_blank" style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em" }}>
-          OPEN TV ↗
+        <a href="/" className="btn btn-ghost btn-icon" aria-label="Home" title="Home">
+          <Icon name="arrowLeft" />
         </a>
-        {/* The key lives in this browser, so without a way to carry it the host
-            is stuck on one device. This is that way — and it is also how a
-            co-host takes over when the first one's phone dies. */}
-        {state.youAreHost && (
-          <button
-            onClick={async () => {
-              const link = linkWithKey(`/host/${room}`, keyFor("host-key", room));
-              try {
-                await navigator.clipboard.writeText(link);
-                setNote({ text: "HOST LINK COPIED — IT CARRIES YOUR KEY, SHARE IT CAREFULLY", ok: true });
-              } catch {
-                setNote({ text: link, ok: true });
-              }
-            }}
-            className="tap"
-            style={{
-              padding: "6px 12px",
-              fontFamily: mono,
-              fontSize: 11,
-              letterSpacing: ".16em",
-              background: C.surface,
-              border: `1px solid ${C.edge}`,
-            }}
-          >
-            ⧉ HOST LINK
-          </button>
-        )}
-        <div
-          style={{
-            fontFamily: mono,
-            fontSize: 14,
-            letterSpacing: ".2em",
-            color: C.accent,
-            border: `1px solid ${C.accentDeep}`,
-            padding: "6px 12px",
-          }}
-        >
-          ROOM {room}
+        <Mark mark={theme.mark} size={30} />
+        <div style={{ minWidth: 0, flex: "1 1 auto" }}>
+          <div className="display truncate" style={{ fontSize: 19 }}>
+            {game?.title ?? "New game"}
+          </div>
+          {started && board && !results && (
+            <div style={{ fontSize: 13, color: C.muted }}>
+              {board.name || `Round ${state.round + 1}`} · {roundClues - roundUsed} clues left
+            </div>
+          )}
         </div>
+        <LiveDot connected={connected} />
+        <a href={`/tv/${room}`} target="_blank" className="btn">
+          <Icon name="tv" /> <span className="hide-sm">Open TV</span>
+        </a>
+        <button
+          className="btn mono"
+          title="Copy the invite link"
+          onClick={() => copyText(inviteUrl, notify, "Invite link copied")}
+          style={{ color: C.accent, letterSpacing: ".14em" }}
+        >
+          {room}
+        </button>
+        <Popover
+          width={250}
+          trigger={({ toggle }) => (
+            <button className="btn btn-ghost btn-icon" onClick={toggle} aria-label="Game menu">
+              <Icon name="more" />
+            </button>
+          )}
+        >
+          {(close) => (
+            <>
+              <div style={{ padding: "6px 12px 8px", fontSize: 12, color: C.muted }}>Buzzers</div>
+              <div style={{ padding: "0 6px 6px" }}>
+                <div className="seg" style={{ width: "100%" }}>
+                  <button aria-pressed={state.lockout === "queue"} onClick={() => send({ type: "setLockout", lockout: "queue" })}>
+                    Queue everyone
+                  </button>
+                  <button aria-pressed={state.lockout !== "queue"} onClick={() => send({ type: "setLockout", lockout: "first-only" })}>
+                    First only
+                  </button>
+                </div>
+              </div>
+              <div style={{ height: 1, background: C.lineSoft, margin: "4px 0" }} />
+              {state.youAreHost && (
+                <button
+                  className="menu-item"
+                  onClick={() => {
+                    copyText(linkWithKey(`/host/${room}`, keyFor("host-key", room)), notify, "Host link copied — whoever opens it can run the game");
+                    close();
+                  }}
+                >
+                  <Icon name="link" size={16} /> Copy co-host link
+                </button>
+              )}
+              {started && (
+                <button className="menu-item" onClick={() => (send({ type: "returnToLobby" }), close())}>
+                  <Icon name="users" size={16} /> Back to lobby
+                </button>
+              )}
+              {game && (
+                <ConfirmButton className="menu-item" confirmLabel="Tap again — scores go to zero" onConfirm={() => (send({ type: "resetBoard" }), close())}>
+                  <Icon name="refresh" size={16} /> Restart game
+                </ConfirmButton>
+              )}
+              <ConfirmButton className="menu-item danger" confirmLabel="Tap again — ends it for everyone" onConfirm={() => (send({ type: "closeRoom" }), close())}>
+                <Icon name="logout" size={16} /> Close room
+              </ConfirmButton>
+            </>
+          )}
+        </Popover>
       </header>
 
-      {/* Someone opened the host URL without the key. Everything below still
-          renders, because watching the console is harmless and useful — but
-          nothing they press will reach the room, so say so once, loudly, rather
-          than letting them discover it by pressing things that do nothing. */}
       {!state.youAreHost && (
         <div
           style={{
-            padding: "14px 22px",
-            background: alpha(C.warn, 12),
-            borderBottom: `1px solid ${C.warn}`,
-            fontFamily: mono,
-            fontSize: 12,
-            letterSpacing: ".16em",
-            color: C.warn,
-            lineHeight: 1.9,
-          }}
-        >
-          WATCHING ONLY — THIS ROOM ALREADY HAS A HOST.
-          <br />
-          <span style={{ color: C.faint }}>
-            ASK THEM FOR THE HOST LINK, OR START A FRESH ROOM FROM THE HOME PAGE.
-          </span>
-        </div>
-      )}
-
-      {error && (
-        <div style={{ padding: "10px 22px", fontFamily: mono, fontSize: 12, color: C.warn, letterSpacing: ".14em" }}>
-          {error.toUpperCase()}
-        </div>
-      )}
-
-      <div style={{ flex: 1, display: "grid", gridTemplateColumns: "minmax(0,1fr) 340px", minHeight: 0 }}>
-        <section style={{ padding: 22, display: "flex", flexDirection: "column", gap: 18, minWidth: 0 }}>
-          {!game && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {/* The boards made in this browser, offered by name. Typing a code
-                  works too, but nobody hosting their own board should have to
-                  remember one. */}
-              {myBoardList.length > 0 && (
-                <>
-                  <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".26em", color: C.muted }}>
-                    YOUR BOARDS
-                  </div>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(auto-fill,minmax(230px,1fr))",
-                      gap: 8,
-                    }}
-                  >
-                    {myBoardList.map((b) => (
-                      <button
-                        key={b.slug}
-                        onClick={() => loadByCode(b.slug)}
-                        className="tap lift"
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          alignItems: "flex-start",
-                          gap: 5,
-                          padding: "12px 14px",
-                          textAlign: "left",
-                          background: C.tile,
-                          border: `1px solid ${C.line}`,
-                          borderLeft: `3px solid ${C.accent}`,
-                        }}
-                      >
-                        <span style={{ fontSize: 15, fontWeight: 600 }}>{b.title || "UNTITLED"}</span>
-                        <span style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em", color: C.accent }}>
-                          {b.slug}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: mono,
-                      fontSize: 11,
-                      letterSpacing: ".22em",
-                      color: C.faint,
-                      borderTop: `1px solid ${C.lineSoft}`,
-                      paddingTop: 14,
-                    }}
-                  >
-                    OR LOAD SOMEONE ELSE&apos;S BY ITS CODE
-                  </div>
-                </>
-              )}
-              {myBoardList.length === 0 && (
-                <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".26em", color: C.muted }}>
-                  LOAD A SAVED BOARD BY ITS CODE
-                </div>
-              )}
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <input
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.toUpperCase())}
-                  onKeyDown={(e) => e.key === "Enter" && loadByCode()}
-                  placeholder="ABC123"
-                  maxLength={12}
-                  style={{
-                    padding: "13px 16px",
-                    fontFamily: mono,
-                    fontSize: 22,
-                    fontWeight: 600,
-                    letterSpacing: ".2em",
-                    color: C.accent,
-                    width: 200,
-                  }}
-                />
-                <button
-                  onClick={() => loadByCode()}
-                  disabled={!code.trim()}
-                  style={{
-                    padding: "13px 20px",
-                    fontFamily: mono,
-                    fontSize: 12,
-                    letterSpacing: ".16em",
-                    fontWeight: 600,
-                    color: C.onAccent,
-                    background: C.accent,
-                    border: "none",
-                  }}
-                >
-                  ↓ LOAD BOARD
-                </button>
-                <a href="/edit" target="_blank" style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".14em" }}>
-                  BUILD ONE ↗
-                </a>
-              </div>
-
-              <div
-                style={{
-                  fontFamily: mono,
-                  fontSize: 11,
-                  letterSpacing: ".22em",
-                  color: C.faint,
-                  borderTop: `1px solid ${C.lineSoft}`,
-                  paddingTop: 14,
-                }}
-              >
-                OR PASTE A GAME AS JSON
-              </div>
-              <textarea
-                value={paste}
-                onChange={(e) => setPaste(e.target.value)}
-                placeholder='{ "title": "MY GAME", "values": [ 200, 400, 600, 800, 1000 ], "categories": [ … ] }'
-                style={{ width: "100%", height: 220, padding: 14, fontFamily: mono, fontSize: 12, lineHeight: 1.7 }}
-              />
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <button
-                  onClick={loadGame}
-                  style={{
-                    padding: "12px 20px",
-                    fontFamily: mono,
-                    fontSize: 12,
-                    letterSpacing: ".16em",
-                    fontWeight: 600,
-                    color: C.onAccent,
-                    background: C.good,
-                    border: "none",
-                  }}
-                >
-                  ↓ LOAD GAME
-                </button>
-                <a href="/design/" target="_blank" style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".14em" }}>
-                  OPEN THE EDITOR ↗
-                </a>
-              </div>
-              {note && (
-                <div
-                  style={{
-                    fontFamily: mono,
-                    fontSize: 11,
-                    letterSpacing: ".14em",
-                    color: note.ok ? C.good : C.warn,
-                  }}
-                >
-                  {note.text}
-                </div>
-              )}
-            </div>
-          )}
-
-          {game && open && openClue && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <div
-                style={{
-                  background: `linear-gradient(120deg,${C.surface},${C.panel})`,
-                  border: `1px solid ${C.edgeSoft}`,
-                  borderLeft: `4px solid ${C.accent}`,
-                  padding: "20px 22px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 14,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                  <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".26em", color: C.accent }}>
-                    {board?.categories[open.c]?.name} · {board?.values[open.r]}
-                  </div>
-                  {openClue.dd && (
-                    <div
-                      style={{
-                        fontFamily: mono,
-                        fontSize: 10,
-                        letterSpacing: ".2em",
-                        color: C.onAccent,
-                        background: C.warn,
-                        padding: "3px 9px",
-                      }}
-                    >
-                      DAILY DOUBLE
-                    </div>
-                  )}
-                  <div style={{ flex: 1 }} />
-                  <div
-                    style={{
-                      fontFamily: mono,
-                      fontSize: 15,
-                      fontWeight: 600,
-                      fontVariantNumeric: "tabular-nums",
-                      color: reading
-                        ? C.info
-                        : resolved
-                          ? C.good
-                          : timer.expired
-                            ? C.warn
-                            : timer.remaining <= 5
-                              ? C.accent
-                              : C.muted,
-                    }}
-                  >
-                    {phase === "wager"
-                      ? "—"
-                      : reading
-                        ? `READING · BUZZERS OPEN IN ${timer.waitRemaining}s`
-                        : resolved
-                          ? "ANSWERED · MOVE ON WHEN READY"
-                          : !state.timed
-                            ? "NO TIMER · CLOSE WHEN READY"
-                            : timer.expired
-                              ? "TIME UP · BUZZERS CLOSED"
-                              : `${timer.remaining}s`}
-                  </div>
-                </div>
-                {openClue.mediaKey && openClue.media && (
-                  <div style={{ width: 240 }}>
-                    <ClueMedia
-                      media={openClue.media}
-                      mediaKey={openClue.mediaKey}
-                      label={openClue.mediaLabel}
-                      height={130}
-                      border={C.line}
-                    />
-                  </div>
-                )}
-                {openClue.t.trim() ? (
-                  <div style={{ fontSize: 26, fontWeight: 500, lineHeight: 1.35 }}>{openClue.t}</div>
-                ) : (
-                  <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".2em", color: C.muted }}>
-                    NOTHING TO READ — THE {(openClue.media ?? "CLUE").toUpperCase()} IS THE QUESTION
-                  </div>
-                )}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    borderTop: `1px dashed ${C.edgeSoft}`,
-                    paddingTop: 14,
-                  }}
-                >
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: C.dim }}>ANSWER</div>
-                  <div style={{ fontSize: 21, fontWeight: 700, color: C.info }}>{openClue.a || "—"}</div>
-                </div>
-              </div>
-
-              {phase === "wager" && dd && (
-                <div
-                  style={{
-                    border: `1px solid ${C.special}`,
-                    background: alpha(C.special, 8),
-                    padding: "18px 20px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 14,
-                  }}
-                >
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".28em", color: C.special }}>
-                    DAILY DOUBLE · WAITING ON A WAGER
-                  </div>
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em", color: C.muted }}>
-                    WHOSE CLUE IS THIS? {control ? "" : "(NOBODY HAS CONTROL YET — PICK ONE)"}
-                  </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {players.map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => send({ type: "setDDPlayer", playerId: p.id })}
-                        style={{
-                          padding: "9px 14px",
-                          fontFamily: mono,
-                          fontSize: 12,
-                          letterSpacing: ".1em",
-                          fontWeight: 600,
-                          color: p.id === dd.playerId ? C.onAccent : C.text,
-                          background: p.id === dd.playerId ? C.special : C.surface,
-                          border: `1px solid ${p.id === dd.playerId ? C.special : C.edge}`,
-                        }}
-                      >
-                        {p.name}
-                        {p.id === control ? " ◆" : ""}
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".16em", color: C.faint }}>
-                    {ddOwner?.name ?? "—"} MAY WAGER {money(dd.min)} TO {money(dd.max)} · THEIR PHONE IS ASKING NOW
-                  </div>
-                  <HostWager min={dd.min} max={dd.max} onLock={(wager) => send({ type: "setWager", wager })} />
-                </div>
-              )}
-
-              {phase === "live" && dd && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".24em", color: C.muted }}>
-                    DAILY DOUBLE — ONLY THIS PLAYER MAY ANSWER
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 14,
-                      padding: "14px 16px",
-                      background: alpha(C.special, 12),
-                      border: `1px solid ${C.special}`,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <div style={{ fontSize: 19, fontWeight: 600, minWidth: 140 }}>{ddOwner?.name ?? "—"}</div>
-                    <div style={{ fontFamily: mono, fontSize: 13, color: C.special, flex: 1 }}>
-                      WAGERED {money(dd.wager ?? 0)}
-                    </div>
-                    {resolved ? (
-                      <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".2em", color: C.good }}>
-                        RULED · ANSWER IS UP
-                      </div>
-                    ) : (
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={() => send({ type: "judge", correct: true })} style={judgeBtn(C.good)}>
-                          ✓ CORRECT +{money(atStake)}
-                        </button>
-                        <button onClick={() => send({ type: "judge", correct: false })} style={judgeBtn(C.warn)}>
-                          ✕ WRONG −{money(atStake)}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {reading && (
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 16,
-                    padding: "16px 18px",
-                    border: `1px solid ${C.info}`,
-                    background: alpha(C.info, 8),
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontFamily: mono,
-                      fontSize: 30,
-                      fontWeight: 600,
-                      fontVariantNumeric: "tabular-nums",
-                      color: C.info,
-                      minWidth: 60,
-                    }}
-                  >
-                    {timer.waitRemaining}s
-                  </div>
-                  <div style={{ flex: 1, minWidth: 180 }}>
-                    <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: C.info }}>
-                      READ IT OUT — NOBODY CAN BUZZ YET
-                    </div>
-                    <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".14em", color: C.faint, marginTop: 4 }}>
-                      THE ROOM SEES THIS COUNTDOWN TOO
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => send({ type: "openBuzzers" })}
-                    className="tap lift"
-                    style={{ ...flatBtn, background: C.info, color: C.onAccent, border: "none", fontWeight: 600 }}
-                  >
-                    ▶ OPEN BUZZERS NOW
-                  </button>
-                </div>
-              )}
-
-              {phase === "buzz" && !reading && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".24em", color: C.muted }}>
-                  {resolved ? "SETTLED — THE ANSWER IS UP ON THE TV" : "WHO BUZZED — RULE ON THE PLAYER AT THE TOP"}
-                </div>
-                {buzzes.length === 0 && !resolved && (
-                  <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".16em", color: C.faint, padding: "8px 0" }}>
-                    NOBODY HAS BUZZED YET
-                  </div>
-                )}
-                {buzzes.map((b, i) => (
-                  <div
-                    key={b.playerId}
-                    className="anim-row"
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 14,
-                      padding: "12px 16px",
-                      background: i === 0 ? "rgba(240,196,105,.12)" : "rgba(255,255,255,.025)",
-                      border: `1px solid ${i === 0 ? C.accentDeep : C.line}`,
-                      flexWrap: "wrap",
-                      animationDelay: `${i * 50}ms`,
-                      transition: "background .2s var(--snap), border-color .2s var(--snap)",
-                    }}
-                  >
-                    <div style={{ fontFamily: mono, fontSize: 18, fontWeight: 600, color: i === 0 ? C.accent : C.dimmer, width: 22 }}>
-                      {i + 1}
-                    </div>
-                    <div style={{ fontSize: 19, fontWeight: 600, minWidth: 140 }}>
-                      {byId.get(b.playerId)?.name ?? "—"}
-                    </div>
-                    <div style={{ fontFamily: mono, fontSize: 12, color: C.muted, flex: 1 }}>
-                      {(b.ms / 1000).toFixed(2)}s
-                    </div>
-                    {i === 0 && !resolved && (
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button
-                          onClick={() => send({ type: "judge", correct: true })}
-                          className="tap lift"
-                          style={judgeBtn(C.good)}
-                        >
-                          ✓ CORRECT +{board?.values[open.r] ?? 0}
-                        </button>
-                        <button
-                          onClick={() => send({ type: "judge", correct: false })}
-                          className="tap lift"
-                          style={judgeBtn(C.warn)}
-                        >
-                          ✕ WRONG −{board?.values[open.r] ?? 0}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-              )}
-
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {phase !== "wager" && !resolved && (
-                  <button onClick={() => send({ type: "reveal", on: !revealed })} style={flatBtn}>
-                    {revealed ? "◇ HIDE ANSWER ON TV" : "◆ REVEAL ANSWER ON TV"}
-                  </button>
-                )}
-                {/* Once a clue is settled, moving on is the only thing left to
-                    do — so it stops being a quiet secondary control. */}
-                <button
-                  onClick={() => send({ type: "closeClue" })}
-                  className="tap lift"
-                  style={
-                    resolved
-                      ? {
-                          ...flatBtn,
-                          background: `linear-gradient(100deg,${C.accent},${C.good})`,
-                          color: C.onAccent,
-                          border: "none",
-                          fontWeight: 600,
-                          letterSpacing: ".2em",
-                        }
-                      : flatBtn
-                  }
-                >
-                  {resolved ? "▶ NEXT — BACK TO THE BOARD" : "↩ CLOSE (MARKS IT PLAYED)"}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {results && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {(() => {
-                const byId = new Map(players.map((p) => [p.id, p]));
-                const left = results.order.length - results.revealed;
-                const nextId = results.order[results.revealed];
-                const next = nextId ? byId.get(nextId) : null;
-                const done = left === 0;
-                const ranked = standings(players);
-                return (
-                  <>
-                    <div
-                      style={{
-                        border: `1px solid ${done ? C.accent : C.special}`,
-                        background: done ? alpha(C.accent, 8) : alpha(C.special, 8),
-                        padding: "18px 20px",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 12,
-                      }}
-                    >
-                      <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".26em", color: done ? C.accent : C.special }}>
-                        FINAL STANDINGS · {results.revealed} OF {results.order.length} REVEALED
-                      </div>
-                      {done ? (
-                        <div style={{ fontSize: 24, fontWeight: 700 }}>
-                          {byId.get(ranked[0]?.id ?? "")?.name ?? "—"} wins with {money(ranked[0]?.score ?? 0)}
-                        </div>
-                      ) : (
-                        <>
-                          <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: C.muted }}>
-                            NEXT TO REVEAL
-                          </div>
-                          <div style={{ display: "flex", alignItems: "baseline", gap: 14, flexWrap: "wrap" }}>
-                            <div style={{ fontSize: 26, fontWeight: 700 }}>{next?.name ?? "—"}</div>
-                            <div style={{ fontFamily: mono, fontSize: 15, color: C.dim }}>
-                              {money(next?.score ?? 0)} · {left === 1 ? "the winner" : `${left} left`}
-                            </div>
-                          </div>
-                        </>
-                      )}
-                    </div>
-
-                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      {!done && (
-                        <button
-                          onClick={() => send({ type: "revealNextPlace" })}
-                          className="tap lift"
-                          style={{
-                            ...flatBtn,
-                            background: `linear-gradient(100deg,${C.special},${C.info})`,
-                            color: C.onAccent,
-                            border: "none",
-                            fontWeight: 600,
-                            letterSpacing: ".2em",
-                          }}
-                        >
-                          {left === 1 ? "◆ REVEAL THE WINNER" : "▶ REVEAL NEXT PLACE"}
-                        </button>
-                      )}
-                      <button onClick={() => send({ type: "endResults" })} className="tap" style={flatBtn}>
-                        ↩ BACK TO THE BOARD
-                      </button>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-          )}
-
-          {game && !started && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-              <div
-                style={{
-                  border: `1px solid ${C.line}`,
-                  background: C.tile,
-                  padding: "18px 20px",
-                  display: "flex",
-                  gap: 24,
-                  alignItems: "center",
-                  flexWrap: "wrap",
-                }}
-              >
-                <JoinPanel room={room} size={132} compact />
-                <div style={{ flex: 1, minWidth: 200 }}>
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: C.muted, marginBottom: 6 }}>
-                    LOBBY
-                  </div>
-                  <div style={{ fontSize: 15, color: C.dim, lineHeight: 1.6, maxWidth: "40ch" }}>
-                    Players scan the code or open{" "}
-                    <span style={{ color: C.accent, fontFamily: mono, fontSize: 13 }}>/play/{room}</span>. The TV is showing
-                    the same code, larger.
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: C.muted }}>
-                    WHO HAS JOINED
-                  </div>
-                  <div style={{ fontFamily: mono, fontSize: 16, fontWeight: 600, color: C.info }}>{players.length}</div>
-                </div>
-
-                {players.length === 0 && (
-                  <div
-                    style={{
-                      border: `1px dashed ${C.line}`,
-                      padding: "22px 18px",
-                      textAlign: "center",
-                      fontFamily: mono,
-                      fontSize: 11,
-                      letterSpacing: ".18em",
-                      color: C.faint,
-                      lineHeight: 2,
-                    }}
-                  >
-                    NOBODY YET — YOU CAN START ANYWAY,
-                    <br />
-                    BUT NOTHING WILL BE SCOREABLE.
-                  </div>
-                )}
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(190px,1fr))", gap: 8 }}>
-                  {players.map((p, i) => (
-                    <div
-                      key={p.id}
-                      className="anim-row"
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        padding: "11px 13px",
-                        background: C.tile,
-                        border: `1px solid ${C.line}`,
-                        borderLeft: `3px solid ${tintFor(p.tint ?? i)}`,
-                        opacity: p.connected ? 1 : 0.5,
-                        animationDelay: `${Math.min(i, 8) * 40}ms`,
-                      }}
-                    >
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ fontSize: 16, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                          {p.name}
-                        </div>
-                        <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".18em", color: C.mutedDeep }}>
-                          {p.connected ? p.cls || "READY" : "AWAY"}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                onClick={() => send({ type: "startGame" })}
-                className="tap lift"
-                style={{
-                  padding: "20px",
-                  fontFamily: mono,
-                  fontSize: 15,
-                  fontWeight: 600,
-                  letterSpacing: ".24em",
-                  color: C.onAccent,
-                  background: `linear-gradient(100deg,${C.accent},${C.good})`,
-                  border: "none",
-                }}
-              >
-                ▶ START THE GAME
-              </button>
-            </div>
-          )}
-
-          {game?.final && final && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-              <div
-                style={{
-                  border: `1px solid ${C.special}`,
-                  background: alpha(C.special, 8),
-                  padding: "18px 20px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 12,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                  <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".28em", color: C.special }}>
-                    FINAL ROUND · {final.phase.toUpperCase()}
-                  </div>
-                  <div style={{ flex: 1 }} />
-                  <div style={{ fontFamily: mono, fontSize: 12, letterSpacing: ".2em", color: C.accent }}>
-                    {game.final.category || "FINAL"}
-                  </div>
-                </div>
-
-                {final.phase !== "wager" && (
-                  <>
-                    <div style={{ fontSize: 24, fontWeight: 500, lineHeight: 1.35 }}>{game.final.t}</div>
-                    <div style={{ display: "flex", gap: 12, alignItems: "center", borderTop: `1px dashed ${C.edgeSoft}`, paddingTop: 12 }}>
-                      <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".2em", color: C.dim }}>ANSWER</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, color: C.info }}>{game.final.a}</div>
-                    </div>
-                  </>
-                )}
-                {final.phase === "wager" && (
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em", color: C.faint, lineHeight: 1.9 }}>
-                    THE CLUE STAYS HIDDEN UNTIL EVERY WAGER IS IN.
-                  </div>
-                )}
-              </div>
-
-              {final.phase === "reveal" ? (
-                (() => {
-                  const id = final.order[final.revealIndex];
-                  const entry = final.entries[id];
-                  const player = byId.get(id);
-                  return (
-                    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                      <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: C.muted }}>
-                        REVEALING {final.revealIndex + 1} OF {final.order.length} — LOWEST SCORE FIRST
-                      </div>
-                      <div
-                        style={{
-                          border: `1px solid ${C.line}`,
-                          background: C.tile,
-                          padding: "18px 20px",
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 14,
-                        }}
-                      >
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-                          <div style={{ fontSize: 24, fontWeight: 600 }}>{player?.name ?? "—"}</div>
-                          <div style={{ fontFamily: mono, fontSize: 13, color: C.dim }}>HAD {money(player?.score ?? 0)}</div>
-                        </div>
-                        <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: C.mutedDeep }}>
-                          THEY WROTE
-                        </div>
-                        <div style={{ fontSize: 28, fontWeight: 600, color: C.text, lineHeight: 1.3 }}>
-                          {entry?.response.trim() || "— nothing —"}
-                        </div>
-                        <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: ".2em", color: C.mutedDeep }}>
-                          THEY WAGERED
-                        </div>
-                        <div style={{ fontFamily: mono, fontSize: 30, fontWeight: 600, color: C.special }}>
-                          {money(entry?.wager ?? 0)}
-                        </div>
-
-                        {entry?.judged === null ? (
-                          <div style={{ display: "flex", gap: 8 }}>
-                            <button onClick={() => send({ type: "judgeFinal", correct: true })} style={judgeBtn(C.good)}>
-                              ✓ CORRECT +{money(entry.wager ?? 0)}
-                            </button>
-                            <button onClick={() => send({ type: "judgeFinal", correct: false })} style={judgeBtn(C.warn)}>
-                              ✕ WRONG −{money(entry.wager ?? 0)}
-                            </button>
-                          </div>
-                        ) : (
-                          <div
-                            style={{
-                              fontFamily: mono,
-                              fontSize: 13,
-                              letterSpacing: ".2em",
-                              color: entry?.judged === "correct" ? C.good : C.warn,
-                            }}
-                          >
-                            RULED {entry?.judged?.toUpperCase()} · NOW ON {money(player?.score ?? 0)}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: C.muted }}>
-                    {final.phase === "wager"
-                      ? "WHO HAS WAGERED"
-                      : final.writingClosed
-                        ? "PENS DOWN — EVERYTHING IS LOCKED IN"
-                        : "WHO HAS ANSWERED"}
-                  </div>
-                  {final.order.map((id) => {
-                    const entry = final.entries[id];
-                    const ready = final.phase === "wager" ? entry.wager !== null : entry.response.trim() !== "";
-                    return (
-                      <div
-                        key={id}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 12,
-                          padding: "11px 14px",
-                          background: C.tile,
-                          border: `1px solid ${ready ? C.accentDeep : C.line}`,
-                        }}
-                      >
-                        <div style={{ fontSize: 17, fontWeight: 600, flex: 1 }}>{byId.get(id)?.name ?? "—"}</div>
-                        <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em", color: ready ? C.good : C.faint }}>
-                          {ready ? "IN" : "WAITING…"}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                {final.phase === "clue" && !final.writingClosed && (
-                  <button onClick={() => send({ type: "closeFinalWriting" })} className="tap" style={flatBtn}>
-                    ✋ PENS DOWN
-                  </button>
-                )}
-                {final.phase !== "done" && (
-                  <button
-                    onClick={() => send({ type: "finalAdvance" })}
-                    style={{ ...flatBtn, background: C.special, color: C.onAccent, border: "none", fontWeight: 600 }}
-                  >
-                    {final.phase === "wager"
-                      ? "▶ SHOW THE CLUE"
-                      : final.phase === "clue"
-                        ? "▶ START REVEALING"
-                        : final.revealIndex < final.order.length - 1
-                          ? "▶ NEXT PLAYER"
-                          : "▶ FINISH"}
-                  </button>
-                )}
-                <button onClick={() => send({ type: "endFinal" })} style={flatBtn}>
-                  {final.phase === "done" ? "↩ BACK TO THE BOARD" : "✕ ABANDON FINAL ROUND"}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {game && started && !open && !final && !results && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".24em", color: C.muted }}>
-                  PICK A CLUE — IT GOES LIVE ON EVERY SCREEN
-                </div>
-                <div style={{ flex: 1 }} />
-                <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".18em", color: C.faint }}>
-                  WHOSE PICK?
-                </div>
-                {/* Control is normally won by answering correctly, but a clue
-                    nobody got leaves it stale — so the host can hand it over
-                    rather than argue about whose turn it is. */}
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  {players.map((p) => (
-                    <button
-                      key={p.id}
-                      onClick={() => send({ type: "setControl", playerId: p.id === control ? null : p.id })}
-                      className="tap"
-                      style={{
-                        padding: "7px 12px",
-                        fontFamily: mono,
-                        fontSize: 11,
-                        letterSpacing: ".1em",
-                        fontWeight: 600,
-                        color: p.id === control ? C.onAccent : C.dim,
-                        background: p.id === control ? C.accent : C.surface,
-                        border: `1px solid ${p.id === control ? C.accent : C.edge}`,
-                      }}
-                    >
-                      {p.name}
-                    </button>
-                  ))}
-                  {players.length === 0 && (
-                    <span style={{ fontFamily: mono, fontSize: 11, color: C.faint }}>—</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Rounds advance by themselves when a board empties; this is for
-                  going back, or skipping ahead when a round is being cut for
-                  time. */}
-              {game.rounds.length > 1 && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".22em", color: C.muted }}>ROUND</div>
-                  {game.rounds.map((r, i) => {
-                    const on = i === state.round;
-                    const done = totalClues(r) > 0 && used.filter((k) => k.startsWith(`${i}-`)).length >= totalClues(r);
-                    return (
-                      <button
-                        key={r.id ?? i}
-                        onClick={() => send({ type: "setRound", index: i })}
-                        className="tap"
-                        style={{
-                          padding: "8px 14px",
-                          fontFamily: mono,
-                          fontSize: 11,
-                          letterSpacing: ".14em",
-                          fontWeight: 600,
-                          color: on ? C.onAccent : done ? C.faint : C.dim,
-                          background: on ? C.accent : C.surface,
-                          border: `1px solid ${on ? C.accent : C.edge}`,
-                        }}
-                      >
-                        {r.name || `ROUND ${i + 1}`}
-                        {done && !on ? " ✓" : ""}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: `repeat(${board?.categories.length ?? 1}, minmax(0,1fr))`,
-                  gap: 6,
-                }}
-              >
-                {board?.categories.map((cat, ci) => (
-                  <div key={ci} style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 600,
-                        letterSpacing: ".05em",
-                        textAlign: "center",
-                        padding: "8px 4px",
-                        borderTop: `2px solid ${C.accent}`,
-                        background: C.surfaceDeep,
-                        minHeight: 46,
-                      }}
-                    >
-                      {cat.name || "—"}
-                    </div>
-                    {board.values.map((value, ri) => {
-                      const spent = used.includes(clueKey(state.round, ci, ri));
-                      return (
-                        <button
-                          key={ri}
-                          disabled={spent}
-                          onClick={() => send({ type: "openClue", c: ci, r: ri })}
-                          className={spent ? undefined : "tile"}
-                          style={{
-                            padding: "14px 0",
-                            fontFamily: mono,
-                            fontSize: 15,
-                            fontWeight: 600,
-                            color: spent ? C.edge : C.accent,
-                            background: spent ? C.panelDeep : C.surface,
-                            border: `1px solid ${spent ? C.lineFaint : C.edge}`,
-                          }}
-                        >
-                          {spent ? "—" : value}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
-
-        <aside
-          style={{
-            borderLeft: `1px solid ${C.lineSoft}`,
-            background: C.panelDeep,
             display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
+            alignItems: "center",
+            gap: 10,
+            padding: "10px 16px",
+            fontSize: 14,
+            color: C.warn,
+            background: alpha(C.warn, 10),
+            borderBottom: `1px solid ${alpha(C.warn, 30)}`,
           }}
         >
-          <div style={{ padding: "16px 18px", borderBottom: `1px solid ${C.lineSoft}` }}>
-            <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".26em", color: C.muted }}>
-              STANDINGS · {players.length}
-            </div>
-          </div>
+          <Icon name="eye" size={16} />
+          <span style={{ flex: 1 }}>Someone else is hosting this room — you can watch, but not control it.</span>
+          <a href="/" className="btn btn-sm">
+            Start my own
+          </a>
+        </div>
+      )}
 
-          <div style={{ flex: 1, overflow: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-            {players.length === 0 && (
-              <div style={{ fontFamily: mono, fontSize: 11, letterSpacing: ".16em", color: C.faint, lineHeight: 2 }}>
-                NOBODY HAS JOINED.
-                <br />
-                SEND THEM TO /play/{room}
-              </div>
-            )}
-            {players.map((p, i) => (
-              <div
-                key={p.id}
-                style={{
-                  background: C.tile,
-                  border: `1px solid ${C.lineFaint}`,
-                  borderLeft: `3px solid ${tintFor(p.tint ?? i)}`,
-                  padding: "12px 12px 10px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
-                  opacity: p.connected ? 1 : 0.5,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 17, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {p.name}
-                    </div>
-                    <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: ".18em", color: C.mutedDeep }}>
-                      {p.connected ? p.cls || theme.copy.classFallback : "AWAY"}
-                    </div>
-                  </div>
-                  <Score value={p.score} style={{ fontFamily: mono, fontSize: 22, fontWeight: 600 }} />
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => send({ type: "adjust", playerId: p.id, delta: -100 })} className="tap" style={tinyBtn}>
-                    − 100
-                  </button>
-                  <button onClick={() => send({ type: "adjust", playerId: p.id, delta: 100 })} className="tap" style={tinyBtn}>
-                    + 100
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (confirmKick === p.id) {
-                        send({ type: "kick", playerId: p.id });
-                        setConfirmKick("");
-                      } else setConfirmKick(p.id);
-                    }}
-                    onBlur={() => setConfirmKick("")}
-                    className="tap"
-                    title={`Remove ${p.name} from the room`}
-                    style={{
-                      ...tinyBtn,
-                      flex: confirmKick === p.id ? 2 : 0,
-                      padding: "7px 9px",
-                      color: confirmKick === p.id ? C.onAccent : C.warn,
-                      background: confirmKick === p.id ? C.warn : C.surfaceDeep,
-                      borderColor: C.warn,
-                    }}
-                  >
-                    {confirmKick === p.id ? "TAP AGAIN — REMOVES THEM" : "✕"}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ borderTop: `1px solid ${C.lineSoft}`, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
-            {started && !results && (
-              <button
-                onClick={() => send({ type: "showResults" })}
-                className="tap lift"
-                style={{
-                  ...flatBtn,
-                  background: `linear-gradient(100deg,${C.accent},${C.warn})`,
-                  color: C.onAccent,
-                  border: "none",
-                  fontWeight: 600,
-                  letterSpacing: ".2em",
-                }}
-              >
-                ★ FINAL STANDINGS
-              </button>
-            )}
-            {started && (
-              <button onClick={() => send({ type: "returnToLobby" })} className="tap" style={flatBtn}>
-                ↩ BACK TO LOBBY
-              </button>
-            )}
-            <button
-              onClick={() => {
-                if (confirmClose) {
-                  send({ type: "closeRoom" });
-                  setConfirmClose(false);
-                } else setConfirmClose(true);
-              }}
-              onBlur={() => setConfirmClose(false)}
-              className="tap"
-              style={{
-                ...flatBtn,
-                color: confirmClose ? C.onAccent : C.warn,
-                background: confirmClose ? C.warn : C.surface,
-                borderColor: C.warn,
-              }}
-            >
-              {confirmClose ? "TAP AGAIN — WIPES THIS ROOM" : "✕ CLOSE ROOM"}
-            </button>
-            {game?.final && !final && started && (
-              <button
-                onClick={() => send({ type: "startFinal" })}
-                style={{
-                  ...flatBtn,
-                  background: `linear-gradient(100deg,${C.special},${C.info})`,
-                  color: C.onAccent,
-                  border: "none",
-                  fontWeight: 600,
-                  letterSpacing: ".2em",
-                }}
-              >
-                ◆ BEGIN FINAL ROUND
-              </button>
-            )}
-            <button
-              onClick={() => send({ type: "setLockout", lockout: lockout === "queue" ? "first-only" : "queue" })}
-              style={flatBtn}
-            >
-              {lockout === "queue" ? "BUZZERS: QUEUE ALL" : "BUZZERS: FIRST ONLY"}
-            </button>
-            <button
-              onClick={() => {
-                if (confirmReset) {
-                  send({ type: "resetBoard" });
-                  setConfirmReset(false);
-                } else {
-                  setConfirmReset(true);
-                }
-              }}
-              style={{ ...flatBtn, color: confirmReset ? C.warn : C.text, borderColor: confirmReset ? C.warn : C.edge }}
-            >
-              {confirmReset ? "TAP AGAIN — CLEARS SCORES TOO" : "↺ RESET BOARD"}
-            </button>
-          </div>
-        </aside>
+      <div className="host-body" style={{ flex: 1, minHeight: 0 }}>
+        <section className="scroll" style={{ padding: "clamp(14px,2vw,24px)", minWidth: 0 }}>
+          {body}
+        </section>
+        {game && <Scoreboard state={state} send={send} />}
       </div>
+      {toast}
     </main>
   );
 }
 
-/** Fallback wager entry, for when a player's phone is dead and they call it out. */
-function HostWager({ min, max, onLock }: { min: number; max: number; onLock: (wager: number) => void }) {
-  const [draft, setDraft] = useState("");
-  const parsed = Number(draft.replace(/[^0-9]/g, ""));
-  const value = draft.trim() === "" ? min : parsed;
-  const clamped = Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
+/* ================================================================ */
+/* No quiz yet                                                       */
+/* ================================================================ */
 
+function PickQuiz({
+  boards,
+  onLoad,
+  onFile,
+  notify,
+}: {
+  boards: BoardRef[];
+  onLoad: (code: string) => void;
+  onFile: (game: NonNullable<RoomState["game"]>) => void;
+  notify: (t: string, tone?: "ok" | "error" | "info") => void;
+}) {
+  const [code, setCode] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <input
-        value={draft}
-        onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ""))}
-        onKeyDown={(e) => e.key === "Enter" && onLock(clamped)}
-        inputMode="numeric"
-        placeholder="ENTER IT FOR THEM"
-        style={{ padding: "10px 12px", fontFamily: mono, fontSize: 14, width: 180 }}
-      />
-      <button onClick={() => onLock(clamped)} style={{ ...flatBtn, borderColor: C.special, color: C.special }}>
-        LOCK IN {money(clamped)}
+    <div style={{ maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24, paddingTop: 12 }}>
+      <h1 className="display" style={{ margin: 0, fontSize: 32 }}>
+        Pick a quiz
+      </h1>
+
+      {boards.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(210px,1fr))", gap: 10 }}>
+          {boards.map((b) => (
+            <button
+              key={b.slug}
+              onClick={() => onLoad(b.slug)}
+              className="card lift tap"
+              style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6, padding: 16, textAlign: "left" }}
+            >
+              <span className="truncate" style={{ fontSize: 16, fontWeight: 600, maxWidth: "100%" }}>
+                {b.title || "Untitled quiz"}
+              </span>
+              <span className="mono" style={{ fontSize: 12, color: C.muted }}>
+                {b.slug}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <form
+        className="card"
+        style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          onLoad(code);
+        }}
+      >
+        <label htmlFor="code" style={{ fontSize: 14, fontWeight: 600, color: C.dim }}>
+          {boards.length ? "Or use someone else's quiz code" : "Enter a quiz code"}
+        </label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            id="code"
+            className="input input-lg mono"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
+            placeholder="ABC123"
+            maxLength={12}
+            style={{ fontWeight: 600, letterSpacing: ".16em" }}
+          />
+          <button className="btn btn-primary btn-lg" disabled={!code.trim()}>
+            Load
+          </button>
+        </div>
+      </form>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <a href="/edit" target="_blank" className="btn">
+          <Icon name="plus" size={16} /> Create a new quiz
+        </a>
+        <button className="btn btn-ghost" onClick={() => fileRef.current?.click()}>
+          <Icon name="upload" size={16} /> Load from a file
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          hidden
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (!file) return;
+            try {
+              const game = parseGame(JSON.parse(await file.text()));
+              if (!game) throw new Error("That file isn't a quiz");
+              onFile(game);
+              notify(`Loaded “${game.title}”`);
+            } catch (err) {
+              notify((err as Error).message, "error");
+            }
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================ */
+/* Lobby                                                             */
+/* ================================================================ */
+
+function LobbyControl({
+  state,
+  room,
+  send,
+  notify,
+}: {
+  state: RoomState;
+  room: string;
+  send: Send;
+  notify: (t: string, tone?: "ok" | "error" | "info") => void;
+}) {
+  const players = state.players;
+  return (
+    <div style={{ maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20 }}>
+      <div className="card" style={{ padding: 20, display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
+        <JoinPanel room={room} size={150} compact />
+        <div style={{ flex: 1, minWidth: 220, display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ fontSize: 15, color: C.dim }}>Players scan the code or type the room code on the home page.</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <a href={`/tv/${room}`} target="_blank" className="btn">
+              <Icon name="tv" size={16} /> Open TV screen
+            </a>
+            <button className="btn" onClick={() => copyText(`${location.origin}/play/${room}`, notify, "Invite link copied")}>
+              <Icon name="link" size={16} /> Copy invite link
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+        <div className="eyebrow">Players</div>
+        <div className="num" style={{ fontWeight: 700, color: C.info }}>
+          {players.length}
+        </div>
+      </div>
+      {players.length === 0 ? (
+        <div
+          style={{
+            border: `1.5px dashed ${C.line}`,
+            borderRadius: "var(--r-lg)",
+            padding: 28,
+            textAlign: "center",
+            color: C.faint,
+          }}
+        >
+          Waiting for people to join…
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {players.map((p, i) => (
+            <span
+              key={p.id}
+              className="chip anim-pop"
+              style={{ height: 36, padding: "0 14px", fontSize: 15, color: C.text, opacity: p.connected ? 1 : 0.5 }}
+            >
+              <span className="dot" style={{ background: tintFor(p.tint ?? i), width: 10, height: 10 }} />
+              {p.name}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <button className="btn btn-primary btn-xl btn-block" onClick={() => send({ type: "startGame" })} style={{ marginTop: 8 }}>
+        <Icon name="play" size={18} /> Start game
       </button>
     </div>
   );
 }
 
-const flatBtn: React.CSSProperties = {
-  padding: "12px 16px",
-  fontFamily: mono,
-  fontSize: 11,
-  letterSpacing: ".16em",
-  background: C.surface,
-  border: `1px solid ${C.edge}`,
-};
+/* ================================================================ */
+/* Board                                                             */
+/* ================================================================ */
 
-const tinyBtn: React.CSSProperties = {
-  flex: 1,
-  padding: "7px 0",
-  fontFamily: mono,
-  fontSize: 11,
-  background: C.surface,
-  border: `1px solid ${C.edgeSoft}`,
-};
+function BoardControl({ state, send }: { state: RoomState; send: Send }) {
+  const { game, players, used, control } = state;
+  const board = roundOf(game, state.round);
+  if (!game || !board) return null;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        {game.rounds.length > 1 && (
+          <div className="seg">
+            {game.rounds.map((r, i) => {
+              const done = totalClues(r) > 0 && used.filter((k) => k.startsWith(`${i}-`)).length >= totalClues(r);
+              return (
+                <button key={r.id ?? i} aria-pressed={i === state.round} onClick={() => send({ type: "setRound", index: i })}>
+                  {r.name || `Round ${i + 1}`}
+                  {done && i !== state.round ? " ✓" : ""}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div style={{ flex: 1 }} />
+        {players.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 13, color: C.muted }}>Picks next</span>
+            <select
+              className="input"
+              value={control ?? ""}
+              onChange={(e) => send({ type: "setControl", playerId: e.target.value || null })}
+              style={{ height: 36, width: "auto", minWidth: 140, fontSize: 14, fontWeight: 600 }}
+            >
+              <option value="">Nobody</option>
+              {players.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
 
-function judgeBtn(bg: string): React.CSSProperties {
-  return {
-    padding: "10px 18px",
-    fontFamily: mono,
-    fontSize: 13,
-    fontWeight: 600,
-    letterSpacing: ".12em",
-    color: C.onAccent,
-    background: bg,
-    border: "none",
-  };
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${board.categories.length}, minmax(0,1fr))`, gap: 6 }}>
+        {board.categories.map((cat, ci) => (
+          <div key={ci} style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+            <div
+              className="display shape"
+              style={{
+                fontSize: 13,
+                textAlign: "center",
+                padding: "10px 6px",
+                minHeight: 52,
+                display: "grid",
+                placeItems: "center",
+                background: C.surface,
+                borderTop: `3px solid ${C.accent}`,
+                overflowWrap: "anywhere",
+              }}
+            >
+              {cat.name || "—"}
+            </div>
+            {board.values.map((value, ri) => {
+              const spent = used.includes(clueKey(state.round, ci, ri));
+              return (
+                <button
+                  key={ri}
+                  disabled={spent}
+                  onClick={() => send({ type: "openClue", c: ci, r: ri })}
+                  className={`display num shape ${spent ? "" : "tile"}`}
+                  style={{
+                    height: "clamp(48px,8vh,72px)",
+                    fontSize: "clamp(16px,1.8vw,24px)",
+                    color: spent ? "transparent" : C.accent,
+                    background: spent ? C.panelDeep : `linear-gradient(180deg,${C.surface},${C.tile})`,
+                    border: `1px solid ${spent ? C.lineFaint : C.edgeSoft}`,
+                    opacity: spent ? 0.6 : 1,
+                  }}
+                  aria-label={spent ? "Played" : `${cat.name} for ${value}`}
+                >
+                  {value}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
-function Shell({ room, children }: { room: string; children: React.ReactNode }) {
+/* ================================================================ */
+/* Clue                                                              */
+/* ================================================================ */
+
+function ClueControl({
+  state,
+  send,
+  timer,
+}: {
+  state: RoomState;
+  send: Send;
+  timer: ReturnType<typeof useCountdown>;
+}) {
+  const { game, players, open, buzzes, revealed, resolved, phase, dd, control } = state;
+  const board = roundOf(game, state.round);
+  const clue = open && board ? board.categories[open.c]?.clues[open.r] : null;
+
+  // Y / N to rule on whoever is up, so the host can keep eyes on the room.
+  const canJudge = !resolved && (phase === "live" ? !!dd : buzzes.length > 0);
+  useEffect(() => {
+    if (!canJudge) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).closest("input, textarea, select")) return;
+      if (e.key === "y" || e.key === "Y") send({ type: "judge", correct: true });
+      if (e.key === "n" || e.key === "N") send({ type: "judge", correct: false });
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [canJudge, send]);
+
+  if (!open || !clue || !board) return null;
+  const byId = new Map(players.map((p) => [p.id, p]));
+  const reading = timer.waiting && phase === "buzz";
+  const stake = dd?.wager ?? board.values[open.r];
+  const ddOwner = dd ? byId.get(dd.playerId) : null;
+
+  const status =
+    phase === "wager"
+      ? { text: "Waiting for a wager", color: C.special }
+      : reading
+        ? { text: `Reading · buzzers open in ${timer.waitRemaining}s`, color: C.info }
+        : resolved
+          ? { text: "Answered", color: C.good }
+          : !state.timed
+            ? { text: "No timer", color: C.muted }
+            : timer.expired
+              ? { text: "Time's up", color: C.warn }
+              : { text: `${timer.remaining}s left`, color: timer.remaining <= 5 ? C.accent : C.muted };
+
   return (
-    <main style={{ height: "100dvh", display: "grid", placeItems: "center" }}>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
-        <div style={{ fontFamily: mono, fontSize: 13, letterSpacing: ".24em", color: C.dim }}>{children}</div>
-        <div style={{ fontFamily: mono, fontSize: 30, fontWeight: 600, letterSpacing: ".2em", color: C.accent }}>{room}</div>
+    <div style={{ maxWidth: 860, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 }}>
+      <div
+        className="card shape"
+        style={{ padding: "20px 22px", display: "flex", flexDirection: "column", gap: 14, borderLeft: `4px solid ${clue.dd ? C.special : C.accent}` }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span className="display" style={{ fontSize: 15, color: C.accent }}>
+            {board.categories[open.c]?.name} · {board.values[open.r]}
+          </span>
+          {clue.dd && (
+            <span className="chip" style={{ color: C.onAccent, background: C.special }}>
+              <Icon name="zap" size={12} fill /> Daily Double
+            </span>
+          )}
+          <span style={{ flex: 1 }} />
+          <span className="chip num" style={{ color: status.color, background: alpha(status.color, 14) }}>
+            {status.text}
+          </span>
+        </div>
+        {clue.mediaKey && clue.media && (
+          <div style={{ width: 260, maxWidth: "100%" }}>
+            <ClueMedia media={clue.media} mediaKey={clue.mediaKey} label={clue.mediaLabel} height={150} border={C.line} />
+          </div>
+        )}
+        {clue.t.trim() ? (
+          <div style={{ fontSize: "clamp(20px,2.4vw,28px)", fontWeight: 500, lineHeight: 1.35 }}>{clue.t}</div>
+        ) : (
+          <div className="dim">The {clue.media ?? "media"} is the clue — nothing to read out.</div>
+        )}
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, borderTop: `1px dashed ${C.edgeSoft}`, paddingTop: 12 }}>
+          <span style={{ fontSize: 13, color: C.muted }}>Answer</span>
+          <span style={{ fontSize: 20, fontWeight: 700, color: C.info }}>{clue.a || "—"}</span>
+        </div>
       </div>
-    </main>
+
+      {phase === "wager" && dd && (
+        <div className="card" style={{ padding: 18, display: "flex", flexDirection: "column", gap: 12, borderColor: alpha(C.special, 50) }}>
+          <div style={{ fontWeight: 600 }}>
+            {ddOwner?.name ?? "Someone"} is wagering {money(dd.min)}–{money(dd.max)} on their phone
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13, color: C.muted }}>Wrong player?</span>
+            <select
+              className="input"
+              value={dd.playerId}
+              onChange={(e) => send({ type: "setDDPlayer", playerId: e.target.value })}
+              style={{ height: 36, width: "auto", fontSize: 14 }}
+            >
+              {players.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.id === control ? " (picked it)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <HostWager min={dd.min} max={dd.max} onLock={(wager) => send({ type: "setWager", wager })} />
+        </div>
+      )}
+
+      {reading && (
+        <button className="btn btn-info btn-lg" onClick={() => send({ type: "openBuzzers" })} style={{ alignSelf: "flex-start" }}>
+          <Icon name="zap" size={16} /> Open buzzers now
+        </button>
+      )}
+
+      {phase === "live" && dd && (
+        <Contestant
+          name={ddOwner?.name ?? "—"}
+          detail={`Wagered ${money(dd.wager ?? 0)}`}
+          first
+          stake={stake}
+          resolved={resolved}
+          send={send}
+        />
+      )}
+
+      {phase === "buzz" && !reading && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {buzzes.length === 0 && !resolved && (
+            <div style={{ padding: 18, textAlign: "center", color: C.faint, border: `1.5px dashed ${C.line}`, borderRadius: "var(--r-lg)" }}>
+              Waiting for a buzz…
+            </div>
+          )}
+          {buzzes.map((b, i) => (
+            <Contestant
+              key={b.playerId}
+              index={i}
+              name={byId.get(b.playerId)?.name ?? "—"}
+              detail={`${(b.ms / 1000).toFixed(2)}s`}
+              first={i === 0}
+              stake={stake}
+              resolved={resolved}
+              send={send}
+            />
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button
+          className={resolved ? "btn btn-primary btn-lg" : "btn"}
+          onClick={() => send({ type: "closeClue" })}
+          style={resolved ? { flex: 1 } : undefined}
+        >
+          {resolved ? (
+            <>
+              Back to the board <Icon name="arrowRight" size={16} />
+            </>
+          ) : (
+            <>
+              <Icon name="x" size={16} /> Close clue
+            </>
+          )}
+        </button>
+        {phase !== "wager" && !resolved && (
+          <button className="btn btn-ghost" onClick={() => send({ type: "reveal", on: !revealed })}>
+            <Icon name={revealed ? "eyeOff" : "eye"} size={16} /> {revealed ? "Hide answer" : "Show answer on TV"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Contestant({
+  index,
+  name,
+  detail,
+  first,
+  stake,
+  resolved,
+  send,
+}: {
+  index?: number;
+  name: string;
+  detail: string;
+  first: boolean;
+  stake: number;
+  resolved: boolean;
+  send: Send;
+}) {
+  return (
+    <div
+      className="anim-row shape"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        padding: "12px 14px 12px 16px",
+        flexWrap: "wrap",
+        borderRadius: "var(--r-md)",
+        background: first ? alpha(C.accent, 12) : C.panel,
+        border: `1px solid ${first ? alpha(C.accent, 50) : C.lineSoft}`,
+        animationDelay: `${(index ?? 0) * 50}ms`,
+      }}
+    >
+      {index !== undefined && (
+        <span className="display num" style={{ fontSize: 20, color: first ? C.accent : C.faint, width: 20 }}>
+          {index + 1}
+        </span>
+      )}
+      <span style={{ fontSize: 19, fontWeight: 700, minWidth: 0 }} className="truncate">
+        {name}
+      </span>
+      <span className="num" style={{ fontSize: 13, color: C.muted, flex: 1 }}>
+        {detail}
+      </span>
+      {first && !resolved && (
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-good btn-lg" onClick={() => send({ type: "judge", correct: true })} title="Correct (Y)">
+            <Icon name="check" size={18} stroke={2.5} /> +{money(stake)}
+          </button>
+          <button className="btn btn-bad btn-lg" onClick={() => send({ type: "judge", correct: false })} title="Wrong (N)">
+            <Icon name="x" size={18} stroke={2.5} /> −{money(stake)}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** For when a player's phone is dead and they call their wager out. */
+function HostWager({ min, max, onLock }: { min: number; max: number; onLock: (wager: number) => void }) {
+  const [draft, setDraft] = useState("");
+  const parsed = Number(draft.replace(/[^0-9]/g, ""));
+  const value = draft.trim() === "" ? min : parsed;
+  const clamped = Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
+  return (
+    <form
+      style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+      onSubmit={(e) => {
+        e.preventDefault();
+        onLock(clamped);
+      }}
+    >
+      <input
+        className="input num"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ""))}
+        inputMode="numeric"
+        placeholder="Enter it for them"
+        style={{ width: 180, height: 38 }}
+      />
+      <button className="btn btn-sm" style={{ height: 38 }}>
+        Lock in {money(clamped)}
+      </button>
+    </form>
+  );
+}
+
+/* ================================================================ */
+/* Final round                                                       */
+/* ================================================================ */
+
+function FinalControl({ state, send }: { state: RoomState; send: Send }) {
+  const final = state.final!;
+  const clue = state.game!.final!;
+  const byId = new Map(state.players.map((p) => [p.id, p]));
+
+  const step =
+    final.phase === "wager" ? "Wagering" : final.phase === "clue" ? (final.writingClosed ? "Pens down" : "Writing") : final.phase === "reveal" ? "Revealing" : "Done";
+
+  return (
+    <div style={{ maxWidth: 820, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 }}>
+      <div className="card" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12, borderColor: alpha(C.special, 45) }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span className="display" style={{ fontSize: 15, color: C.special }}>
+            Final round
+          </span>
+          <span className="chip" style={{ color: C.special, background: alpha(C.special, 14) }}>
+            {step}
+          </span>
+          <span style={{ flex: 1 }} />
+          <span className="display" style={{ fontSize: 15, color: C.accent }}>
+            {clue.category}
+          </span>
+        </div>
+        {final.phase === "wager" ? (
+          <div className="dim">The clue stays hidden until everyone has wagered.</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 22, fontWeight: 500, lineHeight: 1.35 }}>{clue.t}</div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 10, borderTop: `1px dashed ${C.edgeSoft}`, paddingTop: 12 }}>
+              <span style={{ fontSize: 13, color: C.muted }}>Answer</span>
+              <span style={{ fontSize: 19, fontWeight: 700, color: C.info }}>{clue.a}</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      {final.phase === "reveal" ? (
+        (() => {
+          const id = final.order[final.revealIndex];
+          const entry = final.entries[id];
+          const player = byId.get(id);
+          return (
+            <div className="card" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, color: C.muted }}>
+                  {final.revealIndex + 1} of {final.order.length}
+                </span>
+                <span style={{ fontSize: 22, fontWeight: 700 }}>{player?.name ?? "—"}</span>
+                {entry?.judged === null && (
+                  <span className="num" style={{ color: C.dim }}>
+                    has {money(player?.score ?? 0)}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 16, alignItems: "end" }}>
+                <div>
+                  <div style={{ fontSize: 13, color: C.muted }}>Wrote</div>
+                  <div style={{ fontSize: 26, fontWeight: 600 }}>{entry?.response.trim() || "— nothing —"}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 13, color: C.muted }}>Wagered</div>
+                  <div className="display num" style={{ fontSize: 26, color: C.special }}>
+                    {money(entry?.wager ?? 0)}
+                  </div>
+                </div>
+              </div>
+              {entry?.judged === null ? (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn btn-good btn-lg" style={{ flex: 1 }} onClick={() => send({ type: "judgeFinal", correct: true })}>
+                    <Icon name="check" size={18} stroke={2.5} /> Correct
+                  </button>
+                  <button className="btn btn-bad btn-lg" style={{ flex: 1 }} onClick={() => send({ type: "judgeFinal", correct: false })}>
+                    <Icon name="x" size={18} stroke={2.5} /> Wrong
+                  </button>
+                </div>
+              ) : (
+                <div className="chip num" style={{ alignSelf: "flex-start", color: entry?.judged === "correct" ? C.good : C.warn }}>
+                  {entry?.judged === "correct" ? "Correct" : "Wrong"} · now {money(player?.score ?? 0)}
+                </div>
+              )}
+            </div>
+          );
+        })()
+      ) : (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {final.order.map((id) => {
+            const entry = final.entries[id];
+            const ready = final.phase === "wager" ? entry.wager !== null : entry.locked;
+            return (
+              <span key={id} className="chip" style={{ height: 34, padding: "0 12px", fontSize: 14, color: ready ? C.text : C.faint }}>
+                <Icon name={ready ? "check" : "timer"} size={14} style={{ color: ready ? C.good : C.faint }} />
+                {byId.get(id)?.name ?? "—"}
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {final.phase !== "done" && (
+          <button className="btn btn-special btn-lg" style={{ flex: 1 }} onClick={() => send({ type: "finalAdvance" })}>
+            {final.phase === "wager"
+              ? "Show the clue"
+              : final.phase === "clue"
+                ? "Start revealing"
+                : final.revealIndex < final.order.length - 1
+                  ? "Next player"
+                  : "Finish"}
+            <Icon name="arrowRight" size={16} />
+          </button>
+        )}
+        {final.phase === "clue" && !final.writingClosed && (
+          <button className="btn btn-lg" onClick={() => send({ type: "closeFinalWriting" })}>
+            <Icon name="hand" size={16} /> Pens down
+          </button>
+        )}
+        {final.phase === "done" ? (
+          <>
+            <button className="btn btn-primary btn-lg" style={{ flex: 1 }} onClick={() => send({ type: "showResults" })}>
+              <Icon name="trophy" size={16} /> Final standings
+            </button>
+            <button className="btn btn-ghost btn-lg" onClick={() => send({ type: "endFinal" })}>
+              Back to the board
+            </button>
+          </>
+        ) : (
+          <ConfirmButton className="btn btn-ghost btn-lg" confirmLabel="Tap again to abandon" onConfirm={() => send({ type: "endFinal" })}>
+            Abandon
+          </ConfirmButton>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================ */
+/* Results                                                           */
+/* ================================================================ */
+
+function ResultsControl({ state, send }: { state: RoomState; send: Send }) {
+  const results = state.results!;
+  const byId = new Map(state.players.map((p) => [p.id, p]));
+  const left = results.order.length - results.revealed;
+  const next = byId.get(results.order[results.revealed] ?? "");
+  const ranked = standings(state.players);
+  const done = left === 0;
+
+  return (
+    <div style={{ maxWidth: 640, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16, paddingTop: 12 }}>
+      <div className="card" style={{ padding: 24, display: "flex", flexDirection: "column", gap: 10, textAlign: "center", alignItems: "center" }}>
+        <Icon name="trophy" size={28} style={{ color: done ? C.accent : C.special }} />
+        {done ? (
+          <div className="display" style={{ fontSize: 28 }}>
+            {byId.get(ranked[0]?.id ?? "")?.name ?? "—"} wins with {money(ranked[0]?.score ?? 0)}
+          </div>
+        ) : (
+          <>
+            <div style={{ color: C.muted }}>
+              Next up · {left === 1 ? "the winner" : `${left} places to go`}
+            </div>
+            <div className="display" style={{ fontSize: 30 }}>
+              {next?.name ?? "—"}
+            </div>
+            <div className="num dim">{money(next?.score ?? 0)}</div>
+          </>
+        )}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        {!done && (
+          <button className="btn btn-primary btn-xl" style={{ flex: 1 }} onClick={() => send({ type: "revealNextPlace" })}>
+            {left === 1 ? "Reveal the winner" : "Reveal next place"}
+          </button>
+        )}
+        <button className="btn btn-xl" onClick={() => send({ type: "endResults" })} style={done ? { flex: 1 } : undefined}>
+          Back to the board
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================ */
+/* Scoreboard                                                        */
+/* ================================================================ */
+
+function Scoreboard({ state, send }: { state: RoomState; send: Send }) {
+  const { players, started, results, final, game, control } = state;
+  return (
+    <aside
+      className="host-side"
+      style={{ borderLeft: `1px solid ${C.lineSoft}`, background: C.panelDeep, display: "flex", flexDirection: "column", minHeight: 0 }}
+    >
+      <div style={{ padding: "14px 16px 6px", display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="eyebrow" style={{ flex: 1 }}>
+          Scores
+        </div>
+        <span className="chip">
+          <Icon name="users" size={13} /> {players.filter((p) => p.connected).length}
+        </span>
+      </div>
+      <div className="scroll" style={{ flex: 1, padding: "6px 10px", display: "flex", flexDirection: "column", gap: 4 }}>
+        {players.length === 0 && <div style={{ padding: 10, fontSize: 14, color: C.faint }}>Nobody has joined yet.</div>}
+        {players.map((p, i) => (
+          <PlayerRow key={p.id} player={p} index={i} picking={p.id === control} send={send} />
+        ))}
+      </div>
+      {started && !results && (
+        <div style={{ padding: 12, borderTop: `1px solid ${C.lineSoft}`, display: "flex", flexDirection: "column", gap: 8 }}>
+          {game?.final && !final && (
+            <button className="btn btn-special btn-block" onClick={() => send({ type: "startFinal" })}>
+              <Icon name="zap" size={16} fill /> Final round
+            </button>
+          )}
+          <button className="btn btn-block" onClick={() => send({ type: "showResults" })}>
+            <Icon name="trophy" size={16} /> End game & show standings
+          </button>
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function PlayerRow({ player: p, index, picking, send }: { player: Player; index: number; picking: boolean; send: Send }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 6px 8px 10px",
+        borderRadius: "var(--r-md)",
+        background: picking ? alpha(C.accent, 8) : "transparent",
+        opacity: p.connected ? 1 : 0.5,
+      }}
+    >
+      <span className="dot" style={{ background: tintFor(p.tint ?? index), width: 10, height: 10 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="truncate" style={{ fontWeight: 600 }}>
+          {p.name}
+        </div>
+        {(!p.connected || picking) && (
+          <div style={{ fontSize: 12, color: picking ? C.accent : C.faint }}>{picking ? "Picks next" : "Away"}</div>
+        )}
+      </div>
+      <Score value={p.score} style={{ fontSize: 18, fontWeight: 700 }} />
+      <Popover
+        width={200}
+        trigger={({ toggle }) => (
+          <button className="btn btn-ghost btn-icon btn-sm" onClick={toggle} aria-label={`Adjust ${p.name}`}>
+            <Icon name="more" size={16} />
+          </button>
+        )}
+      >
+        {(close) => (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, padding: 6 }}>
+              {[-100, 100, -500, 500].map((d) => (
+                <button key={d} className="btn btn-sm num" onClick={() => send({ type: "adjust", playerId: p.id, delta: d })}>
+                  {d > 0 ? "+" : "−"}
+                  {Math.abs(d)}
+                </button>
+              ))}
+            </div>
+            <div style={{ height: 1, background: C.lineSoft, margin: "4px 0" }} />
+            <ConfirmButton className="menu-item danger" confirmLabel="Tap again to remove" onConfirm={() => (send({ type: "kick", playerId: p.id }), close())}>
+              <Icon name="logout" size={16} /> Remove player
+            </ConfirmButton>
+          </>
+        )}
+      </Popover>
+    </div>
   );
 }

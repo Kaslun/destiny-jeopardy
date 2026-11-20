@@ -1,6 +1,6 @@
 "use client";
 
-import { alpha, C, mono, money, SCENE, tintFor } from "../lib/theme";
+import { alpha, C, money, tintFor } from "../lib/theme";
 import { standings, type RoomState } from "../shared/protocol";
 import type { Theme } from "../lib/themes";
 
@@ -39,7 +39,7 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
         alignItems: "center",
         padding: "clamp(18px,3vh,40px) clamp(20px,4vw,60px)",
         gap: "clamp(12px,2vh,26px)",
-        background: winnerOut ? SCENE.winner : SCENE.results,
+        background: winnerOut ? "var(--scene-winner)" : "var(--scene-results)",
         transition: "background 1.2s var(--snap)",
       }}
     >
@@ -61,15 +61,13 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
       )}
 
       <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, flex: "none" }}>
-        <div style={{ fontFamily: mono, fontSize: "clamp(10px,1vw,15px)", letterSpacing: ".42em", color: C.dim }}>
-          {allOut ? "THAT'S THE GAME" : "FINAL STANDINGS"}
+        <div style={{ fontSize: "clamp(14px,1.3vw,22px)", color: C.dim }}>
+          {allOut ? "That's the game" : "Final standings"}
         </div>
         <div
+          className="display"
           style={{
-            fontSize: "clamp(24px,3.4vw,58px)",
-            fontWeight: 700,
-            letterSpacing: ".05em",
-            lineHeight: 1,
+            fontSize: "clamp(28px,3.6vw,62px)",
             color: allOut ? C.accent : C.text,
             transition: "color .8s var(--snap)",
           }}
@@ -108,16 +106,16 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
                   alignItems: "center",
                   gap: "clamp(14px,2vw,32px)",
                   padding: "clamp(16px,2.4vh,30px) clamp(18px,2.5vw,36px)",
+                  borderRadius: "var(--r-lg)",
                   background: `linear-gradient(100deg, ${alpha(C.accent, 22)}, ${alpha(C.accent, 6)})`,
                   border: `2px solid ${C.accent}`,
                   boxShadow: `0 0 70px ${alpha(C.accent, 35)}`,
                 }}
               >
                 <div
+                  className="display num"
                   style={{
-                    fontFamily: mono,
                     fontSize: "clamp(26px,4vw,72px)",
-                    fontWeight: 600,
                     color: C.accent,
                     width: "2.2ch",
                     textAlign: "center",
@@ -127,11 +125,9 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
+                    className="display"
                     style={{
                       fontSize: "clamp(26px,4.4vw,80px)",
-                      fontWeight: 700,
-                      letterSpacing: ".02em",
-                      lineHeight: 1.05,
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
@@ -139,19 +135,9 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
                   >
                     {player?.name ?? "—"}
                   </div>
-                  <div style={{ fontFamily: mono, fontSize: "clamp(10px,1vw,16px)", letterSpacing: ".3em", color: C.accent }}>
-                    WINNER
-                  </div>
+                  <div style={{ fontSize: "clamp(13px,1.2vw,20px)", fontWeight: 600, color: C.accent }}>Winner</div>
                 </div>
-                <div
-                  style={{
-                    fontFamily: mono,
-                    fontSize: "clamp(22px,3.2vw,58px)",
-                    fontWeight: 600,
-                    color: C.accent,
-                    fontVariantNumeric: "tabular-nums",
-                  }}
-                >
+                <div className="display num" style={{ fontSize: "clamp(22px,3.2vw,58px)", color: C.accent }}>
                   {money(entry.score)}
                 </div>
                 <span
@@ -172,24 +158,25 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
           return (
             <div
               key={entry.id}
-              className={out ? "anim-slam" : undefined}
+              className={out ? "anim-slam shape" : "shape"}
               style={{
+                borderRadius: "var(--r-md)",
                 display: "flex",
                 alignItems: "center",
                 gap: "clamp(12px,1.8vw,26px)",
                 padding: "clamp(9px,1.5vh,18px) clamp(14px,2vw,26px)",
-                background: out ? "rgba(255,255,255,.045)" : "rgba(255,255,255,.015)",
-                border: `1px solid ${out ? medal : C.lineSoft}`,
-                borderLeft: `4px solid ${out && player ? tintFor(state.players.findIndex((p) => p.id === entry.id)) : "transparent"}`,
+                background: out ? C.panel : alpha(C.panel, 40),
+                borderStyle: "solid",
+                borderWidth: "1px 1px 1px 4px",
+                borderColor: `${out ? medal : C.lineSoft} ${out ? medal : C.lineSoft} ${out ? medal : C.lineSoft} ${out && player ? tintFor(player.tint ?? state.players.indexOf(player)) : "transparent"}`,
                 opacity: out ? 1 : 0.5,
                 transition: "opacity .4s var(--snap), background .4s var(--snap), border-color .4s var(--snap)",
               }}
             >
               <div
+                className="display num"
                 style={{
-                  fontFamily: mono,
                   fontSize: "clamp(16px,2.2vw,38px)",
-                  fontWeight: 600,
                   color: out ? medal : C.edge,
                   width: "2.2ch",
                   textAlign: "center",
@@ -202,8 +189,7 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
                   flex: 1,
                   minWidth: 0,
                   fontSize: "clamp(16px,2.1vw,36px)",
-                  fontWeight: 600,
-                  letterSpacing: ".03em",
+                  fontWeight: 700,
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -213,11 +199,9 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
                 {out ? (player?.name ?? "—") : "• • • • •"}
               </div>
               <div
+                className="display num"
                 style={{
-                  fontFamily: mono,
                   fontSize: "clamp(14px,1.9vw,32px)",
-                  fontWeight: 600,
-                  fontVariantNumeric: "tabular-nums",
                   color: out ? (entry.score < 0 ? C.warn : C.text) : C.edge,
                 }}
               >
@@ -233,16 +217,15 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
         className="anim-rise"
         style={{
           flex: "none",
-          fontFamily: mono,
-          fontSize: "clamp(10px,1vw,15px)",
-          letterSpacing: ".3em",
+          fontSize: "clamp(14px,1.3vw,22px)",
+          fontWeight: 600,
           color: allOut ? C.accent : C.faint,
           textAlign: "center",
         }}
       >
         {allOut
-          ? `${winner?.name ?? "—"} TAKES IT WITH ${money(ranked[0]?.score ?? 0)}`
-          : `${results.order.length - results.revealed} PLACE${results.order.length - results.revealed === 1 ? "" : "S"} STILL TO COME`}
+          ? `${winner?.name ?? "—"} takes it with ${money(ranked[0]?.score ?? 0)}`
+          : `${results.order.length - results.revealed} to go`}
       </div>
     </main>
   );
