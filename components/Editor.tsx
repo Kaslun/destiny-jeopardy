@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { alpha, C, newRoomCode } from "../lib/theme";
+import { alpha, C, CELL, newRoomCode } from "../lib/theme";
 import { keyFor, linkWithKey } from "../lib/keys";
 import { myBoards, rememberBoard, saveBoard } from "../lib/boards";
 import { storeEditorName, storedEditorName, useBoard } from "../lib/useBoard";
@@ -880,8 +880,9 @@ function CategoryHeader({
         position: "relative",
         display: "flex",
         alignItems: "center",
-        background: C.surface,
-        borderTop: `3px solid ${C.accent}`,
+        background: CELL,
+        color: C.cellInk,
+        borderTop: "var(--cat-rule)",
         minHeight: 56,
       }}
     >
@@ -889,8 +890,19 @@ function CategoryHeader({
         value={name}
         onCommit={onName}
         placeholder="Category"
+        multiline
         className="input input-ghost display"
-        style={{ height: "100%", minHeight: 52, textAlign: "center", fontSize: 15, padding: "0 30px 0 10px", borderRadius: 0 }}
+        style={{
+          height: "100%",
+          minHeight: 56,
+          textAlign: "center",
+          fontSize: 14,
+          lineHeight: 1.15,
+          padding: "10px 26px 8px 8px",
+          borderRadius: 0,
+          color: "inherit",
+          overflow: "hidden",
+        }}
         ariaLabel="Category name"
       />
       <div style={{ position: "absolute", right: 2, top: "50%", transform: "translateY(-50%)" }}>

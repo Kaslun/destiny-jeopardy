@@ -6,7 +6,7 @@ import { C, newRoomCode } from "../lib/theme";
 import { useTheme } from "../lib/useTheme";
 import { DEFAULT_THEME_ID } from "../lib/themes";
 import { myBoards, type BoardRef } from "../lib/boards";
-import { Icon, Mark } from "../components/ui";
+import { Icon } from "../components/ui";
 
 export default function Landing() {
   const router = useRouter();
@@ -34,8 +34,7 @@ export default function Landing() {
       }}
     >
       <header style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center" }}>
-        <Mark size={56} />
-        <h1 className="display" style={{ margin: 0, fontSize: "clamp(36px,7vw,56px)" }}>
+        <h1 className="display" style={{ margin: 0, fontSize: "clamp(44px,9vw,76px)" }}>
           {theme.copy.appName}
         </h1>
         <p style={{ margin: 0, color: C.dim, fontSize: 16 }}>{theme.copy.tagline}</p>

@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect } from "react";
-import { C } from "../lib/theme";
+import { C, CELL } from "../lib/theme";
 import { FONTS, THEMES, type Theme } from "../lib/themes";
 import type { BoardStyle } from "../shared/protocol";
 import { Drawer, Icon, Mark, Segmented, SwitchRow } from "./ui";
 
-const ACCENTS = ["#ffcc33", "#ff8c5a", "#ff3ea5", "#b07bff", "#3355ff", "#3ee8ff", "#4dd6c1", "#5fdc8f"];
-const BACKGROUNDS = ["#04081c", "#05070c", "#0b0615", "#1b0f1c", "#0d1a14", "#1c1c22", "#f4f2ec", "#ffffff"];
+const ACCENTS = ["#ffc93c", "#ff8c5a", "#ff3ea5", "#b07bff", "#3355ff", "#3ee8ff", "#4dd6c1", "#5fdc8f"];
+const BACKGROUNDS = ["#0b0630", "#04081c", "#05070c", "#1b0f1c", "#0d1a14", "#1c1c22", "#f4f2ec", "#ffffff"];
+const BOARDS = ["#0b1de0", "#0a3a9e", "#5a1fb8", "#9c1d6b", "#0b6e54", "#b3261e", "#1c1c22", "#f4f2ec"];
 const MARKS = ["🎯", "🧠", "🏆", "⚡", "🎉", "🎄", "👻", "🍕"];
 
 /** Load every pickable face once, so the font buttons preview themselves. */
@@ -122,6 +123,10 @@ export function StylePanel({
         <Swatches value={theme.colors.accent} options={ACCENTS} onPick={(c) => set("accent", c)} />
       </Group>
 
+      <Group title="Board screens">
+        <Swatches value={theme.colors.cell} options={BOARDS} onPick={(c) => set("board", c)} />
+      </Group>
+
       <Group title="Background">
         <Swatches value={theme.colors.bg} options={BACKGROUNDS} onPick={(c) => set("bg", c)} />
       </Group>
@@ -147,7 +152,7 @@ export function StylePanel({
                   textAlign: "left",
                 }}
               >
-                <span style={{ fontFamily: f.stack, fontSize: 22, fontWeight: 700, lineHeight: 1 }}>Aa</span>
+                <span style={{ fontFamily: f.stack, fontSize: 22, fontWeight: f.weight ?? 700, lineHeight: 1 }}>Aa</span>
                 <span className="truncate" style={{ fontSize: 13, color: C.dim }}>
                   {f.name}
                 </span>
@@ -177,10 +182,10 @@ export function StylePanel({
           <button
             onClick={() => set("mark", undefined)}
             aria-pressed={!theme.mark}
-            title="Default"
+            title="No logo"
             style={markBtn(!theme.mark)}
           >
-            <Mark size={26} />
+            <Icon name="x" size={18} style={{ color: C.muted }} />
           </button>
           {MARKS.map((m) => (
             <button key={m} onClick={() => set("mark", m)} aria-pressed={theme.mark === m} style={markBtn(theme.mark === m)}>
@@ -293,21 +298,22 @@ function Preview({ theme }: { theme: Theme }) {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <Mark mark={theme.mark} size={26} />
-        <div className="display" style={{ fontSize: 18 }}>
+        <div className="display broadcast" style={{ fontSize: 18 }}>
           Quiz night
         </div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 5 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 4, padding: 4, background: C.gap, borderRadius: "var(--r-md)" }}>
         {["Films", "Science", "Food", "Music"].map((c) => (
           <div
             key={c}
-            className="display shape"
+            className="display broadcast shape"
             style={{
               fontSize: 10,
               textAlign: "center",
               padding: "6px 2px",
-              background: C.surface,
-              borderTop: `2px solid ${C.accent}`,
+              background: CELL,
+              color: C.cellInk,
+              borderTop: "var(--cat-rule)",
               borderRadius: "var(--r-sm)",
             }}
           >
@@ -323,11 +329,11 @@ function Preview({ theme }: { theme: Theme }) {
                 fontSize: 15,
                 textAlign: "center",
                 padding: "6px 0",
-                color: C.accent,
-                background: `linear-gradient(180deg, ${C.surface}, ${C.tile})`,
-                border: `1px solid ${C.edgeSoft}`,
+                color: v === 200 && i === 1 ? "transparent" : C.accent,
+                textShadow: v === 200 && i === 1 ? "none" : "var(--value-shadow)",
+                background: v === 200 && i === 1 ? "var(--cell-spent)" : CELL,
+                border: "1px solid var(--cell-line)",
                 borderRadius: "var(--r-sm)",
-                opacity: v === 200 && i === 1 ? 0.25 : 1,
               }}
             >
               {v}

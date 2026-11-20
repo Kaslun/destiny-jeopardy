@@ -13,8 +13,10 @@ export function Score({
   style,
   negativeColor = C.warn,
   positiveColor = C.text,
+  className,
 }: {
   value: number;
+  className?: string;
   style?: React.CSSProperties;
   negativeColor?: string;
   positiveColor?: string;
@@ -24,7 +26,7 @@ export function Score({
   return (
     <span
       key={direction ?? "idle"}
-      className={direction === "up" ? "flash-up" : direction === "down" ? "flash-down" : undefined}
+      className={[className, direction === "up" ? "flash-up" : direction === "down" ? "flash-down" : ""].filter(Boolean).join(" ") || undefined}
       style={{
         display: "inline-block",
         fontVariantNumeric: "tabular-nums",

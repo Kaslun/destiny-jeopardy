@@ -223,6 +223,8 @@ export interface BoardStyle {
   accent?: string;
   /** Page background. Everything else is derived from it. `#rrggbb`. */
   bg?: string;
+  /** The board's screens — the clue cells on the TV. `#rrggbb`. */
+  board?: string;
   /** Display typeface id, resolved against the client's font list. */
   font?: string;
   corners?: "sharp" | "cut" | "soft" | "round";
@@ -241,6 +243,7 @@ export function parseStyle(raw: unknown): BoardStyle | undefined {
   const out: BoardStyle = {};
   if (typeof s.accent === "string" && HEX.test(s.accent)) out.accent = s.accent.toLowerCase();
   if (typeof s.bg === "string" && HEX.test(s.bg)) out.bg = s.bg.toLowerCase();
+  if (typeof s.board === "string" && HEX.test(s.board)) out.board = s.board.toLowerCase();
   if (typeof s.font === "string" && /^[a-z0-9-]{1,32}$/.test(s.font)) out.font = s.font;
   if (CORNERS.includes(s.corners as BoardStyle["corners"] & string)) out.corners = s.corners as BoardStyle["corners"];
   if (typeof s.caps === "boolean") out.caps = s.caps;
@@ -715,7 +718,7 @@ export function parseGame(raw: unknown): Game | null {
       : undefined;
 
   return {
-    title: String(g.title ?? "JEOPARDY"),
+    title: String(g.title ?? "Jeoparty"),
     subtitle: String(g.subtitle ?? ""),
     roomCode: String(g.roomCode ?? ""),
     players: Array.isArray(g.players)

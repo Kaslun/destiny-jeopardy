@@ -65,7 +65,7 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
           {allOut ? "That's the game" : "Final standings"}
         </div>
         <div
-          className="display"
+          className="display broadcast"
           style={{
             fontSize: "clamp(28px,3.6vw,62px)",
             color: allOut ? C.accent : C.text,
@@ -125,9 +125,9 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div
-                    className="display"
+                    className="name-text"
                     style={{
-                      fontSize: "clamp(26px,4.4vw,80px)",
+                      fontSize: "calc(clamp(26px,4.4vw,80px) * var(--name-scale))",
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
@@ -188,7 +188,8 @@ export function Results({ state, theme }: { state: RoomState; theme: Theme }) {
                 style={{
                   flex: 1,
                   minWidth: 0,
-                  fontSize: "clamp(16px,2.1vw,36px)",
+                  fontSize: "calc(clamp(16px,2.1vw,36px) * var(--name-scale))",
+                  fontFamily: "var(--font-name)",
                   fontWeight: 700,
                   whiteSpace: "nowrap",
                   overflow: "hidden",

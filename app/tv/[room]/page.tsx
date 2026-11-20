@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import { useEffect, useRef } from "react";
-import { alpha, C, money, tintFor } from "../../../lib/theme";
+import { alpha, C, CELL, money, tintFor } from "../../../lib/theme";
 import { Icon, Mark } from "../../../components/ui";
 import { Score } from "../../../components/Score";
 import { ClueMedia } from "../../../components/ClueMedia";
@@ -185,7 +185,7 @@ export default function TvBoard() {
       <header style={{ display: "flex", alignItems: "center", gap: 18, flex: "none" }}>
         <Mark mark={theme.mark} size={52} />
         <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
-          <div className="display truncate" style={{ fontSize: "clamp(24px,2.4vw,42px)" }}>
+          <div className="display broadcast truncate" style={{ fontSize: "clamp(24px,2.4vw,42px)" }}>
             {game.title}
           </div>
           <div style={{ fontSize: "clamp(13px,1vw,18px)", color: C.dim, display: "flex", gap: 10 }}>
@@ -236,6 +236,11 @@ export default function TvBoard() {
           display: "grid",
           gridTemplateColumns: `repeat(${board.categories.length}, 1fr)`,
           gap: "clamp(6px,0.6vw,10px)",
+          // On a monitor-wall theme this is the black bezel around the screens.
+          background: C.gap,
+          padding: "clamp(6px,0.6vw,10px)",
+          margin: "calc(-1 * clamp(6px,0.6vw,10px))",
+          borderRadius: "var(--r-lg)",
         }}
       >
         {board.categories.map((cat, ci) => (
@@ -251,16 +256,17 @@ export default function TvBoard() {
             <div
               className="shape"
               style={{
-                background: `linear-gradient(180deg,${C.surface},${C.panel})`,
-                border: `1px solid ${C.edgeSoft}`,
-                borderTop: `3px solid ${C.accent}`,
+                background: CELL,
+                border: "1px solid var(--cell-line)",
+                borderTop: "var(--cat-rule)",
                 display: "grid",
                 placeItems: "center",
                 padding: "0 10px",
                 textAlign: "center",
+                color: C.cellInk,
               }}
             >
-              <div className="display" style={{ fontSize: "clamp(14px,1.4vw,28px)", lineHeight: 1.12, overflowWrap: "anywhere" }}>
+              <div className="display broadcast" style={{ fontSize: "clamp(14px,1.5vw,30px)", lineHeight: 1.1, overflowWrap: "anywhere" }}>
                 {cat.name || "—"}
               </div>
             </div>
@@ -273,15 +279,15 @@ export default function TvBoard() {
                   style={{
                     display: "grid",
                     placeItems: "center",
-                    background: spent ? alpha(C.panelDeep, 70) : `linear-gradient(180deg,${C.surface},${C.tile})`,
-                    border: `1px solid ${spent ? C.lineSoft : C.edgeSoft}`,
+                    background: spent ? "var(--cell-spent)" : CELL,
+                    border: "1px solid var(--cell-line)",
                     transition: "background .4s var(--snap)",
                   }}
                 >
                   {!spent && (
                     <div
                       className="display num"
-                      style={{ fontSize: "clamp(22px,3.2vw,64px)", color: C.accent, textShadow: `0 0 26px ${alpha(C.accent, 28)}` }}
+                      style={{ fontSize: "clamp(26px,3.6vw,72px)", color: C.accent, textShadow: "var(--value-shadow)" }}
                     >
                       {value}
                     </div>
@@ -316,17 +322,23 @@ export default function TvBoard() {
                 alignItems: "center",
                 gap: 14,
                 padding: "0 clamp(12px,1.2vw,22px)",
-                background: picking ? alpha(C.accent, 10) : C.panel,
+                background: CELL,
+                color: C.cellInk,
                 borderStyle: "solid",
-                borderWidth: "1px 1px 1px 5px",
-                borderColor: `${picking ? alpha(C.accent, 50) : C.line} ${picking ? alpha(C.accent, 50) : C.line} ${picking ? alpha(C.accent, 50) : C.line} ${tintFor(p.tint ?? i)}`,
+                borderWidth: "2px 2px 2px 6px",
+                borderColor: `${picking ? C.accent : "var(--cell-line)"} ${picking ? C.accent : "var(--cell-line)"} ${picking ? C.accent : "var(--cell-line)"} ${tintFor(p.tint ?? i)}`,
                 opacity: p.connected ? 1 : 0.45,
               }}
             >
-              <div className="truncate" style={{ fontSize: "clamp(14px,1.3vw,26px)", fontWeight: 700, flex: 1 }}>
+              <div className="name-text truncate" style={{ fontSize: "calc(clamp(16px,1.7vw,32px) * var(--name-scale))", flex: 1 }}>
                 {p.name}
               </div>
-              <Score value={p.score} style={{ fontFamily: "var(--font-display)", fontSize: "clamp(18px,2vw,40px)", fontWeight: 700 }} />
+              <Score
+                value={p.score}
+                positiveColor={C.cellInk}
+                className="broadcast"
+                style={{ fontFamily: "var(--font-display)", fontSize: "clamp(20px,2.2vw,44px)", fontWeight: "var(--display-weight)" }}
+              />
             </div>
           );
         })}
@@ -350,11 +362,16 @@ export default function TvBoard() {
           }}
         >
           <div style={{ fontSize: "clamp(16px,1.5vw,26px)", color: C.special, fontWeight: 600 }}>{board.categories[open.c]?.name}</div>
-          <div className="display" style={{ fontSize: "clamp(56px,8vw,140px)", textShadow: `0 0 60px ${alpha(C.special, 45)}` }}>
+          <div
+            className="display broadcast"
+            style={{ fontSize: "clamp(64px,9vw,160px)", color: C.accent, filter: `drop-shadow(0 0 40px ${alpha(C.special, 55)})` }}
+          >
             Daily Double
           </div>
-          <div style={{ fontSize: "clamp(22px,2.4vw,42px)", fontWeight: 700 }}>{ddOwner?.name ?? "—"} is placing a bet</div>
-          <div className="num" style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.faint }}>
+          <div className="broadcast" style={{ fontSize: "clamp(22px,2.4vw,42px)", fontWeight: 700 }}>
+            {ddOwner?.name ?? "—"} is placing a bet
+          </div>
+          <div className="num" style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.dim }}>
             {money(dd.min)} – {money(dd.max)}
           </div>
         </div>
@@ -390,10 +407,10 @@ export default function TvBoard() {
           </div>
 
           <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 18, padding: "clamp(16px,2vw,28px) clamp(24px,3vw,48px)" }}>
-            <div className="display" style={{ fontSize: "clamp(16px,1.5vw,28px)", color: C.accent }}>
+            <div className="display broadcast" style={{ fontSize: "clamp(16px,1.5vw,28px)", color: C.cellInk }}>
               {board.categories[open.c]?.name}
             </div>
-            <div className="display num" style={{ fontSize: "clamp(16px,1.5vw,28px)", color: dd ? C.special : C.dim }}>
+            <div className="display num broadcast" style={{ fontSize: "clamp(16px,1.5vw,28px)", color: dd ? C.special : C.accent }}>
               {dd ? `Bet ${money(dd.wager ?? 0)}` : board.values[open.r]}
             </div>
             <div style={{ flex: 1 }} />
@@ -446,7 +463,7 @@ export default function TvBoard() {
                 </div>
               )}
               {openClue.t.trim() && (
-                <div style={{ fontFamily: "var(--font-display)", fontSize: "clamp(28px,3.8vw,72px)", fontWeight: 600, lineHeight: 1.2, textWrap: "balance" }}>
+                <div className="clue-text" style={{ fontSize: "clamp(28px,3.6vw,68px)", color: C.cellInk, textAlign: openClue.media ? "left" : "center" }}>
                   {openClue.t}
                 </div>
               )}
@@ -456,7 +473,7 @@ export default function TvBoard() {
                   style={{ display: "flex", alignItems: "baseline", gap: 18, flexWrap: "wrap", borderTop: `1px solid ${C.edgeSoft}`, paddingTop: 24 }}
                 >
                   <div style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.dim }}>Answer</div>
-                  <div className="display" style={{ fontSize: "clamp(24px,2.6vw,48px)", color: C.accent }}>
+                  <div className="display broadcast" style={{ fontSize: "clamp(24px,2.6vw,48px)", color: C.accent }}>
                     {openClue.a || "—"}
                   </div>
                 </div>
@@ -571,7 +588,7 @@ function FinalBoard({ state }: { state: RoomState }) {
       }}
     >
       <div style={{ fontSize: "clamp(16px,1.5vw,26px)", fontWeight: 600, color: C.special }}>Final round</div>
-      <div className="display" style={{ fontSize: "clamp(36px,5vw,88px)", textShadow: `0 0 60px ${alpha(C.special, 40)}` }}>
+      <div className="display broadcast" style={{ fontSize: "clamp(36px,5vw,88px)", filter: `drop-shadow(0 0 40px ${alpha(C.special, 40)})` }}>
         {clue?.category || "Final"}
       </div>
 
@@ -592,7 +609,7 @@ function FinalBoard({ state }: { state: RoomState }) {
       )}
 
       {final.phase === "clue" && (
-        <div style={{ fontFamily: "var(--font-display)", fontSize: "clamp(24px,3.2vw,58px)", fontWeight: 600, lineHeight: 1.25, maxWidth: "24ch", textWrap: "balance" }}>
+        <div className="clue-text" style={{ fontSize: "clamp(24px,3.2vw,58px)", maxWidth: "26ch" }}>
           {clue?.t}
         </div>
       )}
@@ -600,7 +617,7 @@ function FinalBoard({ state }: { state: RoomState }) {
       {(final.phase === "reveal" || final.phase === "done") && (
         <div style={{ display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap", justifyContent: "center" }}>
           <span style={{ fontSize: "clamp(14px,1.2vw,22px)", color: C.dim }}>Answer</span>
-          <span className="display" style={{ fontSize: "clamp(22px,2.6vw,44px)", color: C.info }}>
+          <span className="display broadcast" style={{ fontSize: "clamp(22px,2.6vw,44px)", color: C.accent }}>
             {clue?.a}
           </span>
         </div>

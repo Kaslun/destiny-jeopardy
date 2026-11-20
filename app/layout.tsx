@@ -22,10 +22,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-        {/* The UI face, the code face and the default display face. Any other
-            display face a board picks is requested on demand by `useTheme`. */}
+        {/* The UI face, the code face and the default theme's faces. Anything
+            else a board picks is requested on demand by `useTheme`. */}
         <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&family=Oswald:wght@500;600;700&display=swap"
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&family=Anton&family=Merriweather:wght@400;700;900&family=Caveat:wght@600;700&display=swap"
           rel="stylesheet"
         />
         <ThemeStyle theme={base} />

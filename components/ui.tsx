@@ -98,44 +98,26 @@ export function Icon({
 /* Brand mark                                                           */
 /* ------------------------------------------------------------------ */
 
-/** The logo slot: the board's chosen mark, or the default diamond. */
+/** The logo slot: the board's chosen mark, or nothing at all. */
 export function Mark({ mark, size = 40 }: { mark?: string; size?: number }) {
-  if (mark) {
-    return (
-      <div
-        aria-hidden
-        style={{
-          width: size,
-          height: size,
-          flex: "none",
-          display: "grid",
-          placeItems: "center",
-          fontSize: size * 0.62,
-          lineHeight: 1,
-          fontFamily: "var(--font-display)",
-          fontWeight: 700,
-          color: C.accent,
-        }}
-      >
-        {mark}
-      </div>
-    );
-  }
+  if (!mark) return null;
   return (
-    <div aria-hidden style={{ width: size, height: size, flex: "none", display: "grid", placeItems: "center" }}>
-      <div
-        style={{
-          width: size * 0.66,
-          height: size * 0.66,
-          border: `2px solid ${C.accent}`,
-          borderRadius: "var(--r-sm)",
-          transform: "rotate(45deg)",
-          display: "grid",
-          placeItems: "center",
-        }}
-      >
-        <div style={{ width: size * 0.24, height: size * 0.24, background: C.accent, borderRadius: 2 }} />
-      </div>
+    <div
+      aria-hidden
+      style={{
+        width: size,
+        height: size,
+        flex: "none",
+        display: "grid",
+        placeItems: "center",
+        fontSize: size * 0.62,
+        lineHeight: 1,
+        fontFamily: "var(--font-display)",
+        fontWeight: 700,
+        color: C.accent,
+      }}
+    >
+      {mark}
     </div>
   );
 }

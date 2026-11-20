@@ -8,7 +8,7 @@ import type { BoardStyle } from "../shared/protocol";
 const ELEMENT_ID = "theme-vars";
 
 /** Faces the root layout already requests, so they are never fetched twice. */
-const PRELOADED = new Set(["oswald"]);
+const PRELOADED = new Set(["anton", "merriweather", "caveat", "inter"]);
 
 /** Request a display face from Google Fonts the first time a theme needs it. */
 function ensureFont(id: string): void {
@@ -34,7 +34,7 @@ export function useTheme(id: string | undefined | null, style?: BoardStyle | nul
   const theme = resolveTheme(id, style);
 
   useEffect(() => {
-    ensureFont(theme.fontId);
+    theme.fontIds.forEach(ensureFont);
     let el = document.getElementById(ELEMENT_ID) as HTMLStyleElement | null;
     if (!el) {
       el = document.createElement("style");

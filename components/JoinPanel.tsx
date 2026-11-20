@@ -23,7 +23,6 @@ export function JoinPanel({ room, size = 200, compact = false }: { room: string;
           background: "#ffffff",
           borderRadius: "var(--r-lg)",
           lineHeight: 0,
-          boxShadow: "0 16px 50px rgba(0,0,0,.35)",
         }}
       >
         {url ? (

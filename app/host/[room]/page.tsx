@@ -2,7 +2,7 @@
 
 import { useParams, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { alpha, C, money, tintFor } from "../../../lib/theme";
+import { alpha, C, CELL, money, tintFor } from "../../../lib/theme";
 import { Score } from "../../../components/Score";
 import { useRole } from "../../../lib/useRoom";
 import { useTheme } from "../../../lib/useTheme";
@@ -419,14 +419,15 @@ function BoardControl({ state, send }: { state: RoomState; send: Send }) {
             <div
               className="display shape"
               style={{
-                fontSize: 13,
+                fontSize: 14,
                 textAlign: "center",
                 padding: "10px 6px",
                 minHeight: 52,
                 display: "grid",
                 placeItems: "center",
-                background: C.surface,
-                borderTop: `3px solid ${C.accent}`,
+                background: CELL,
+                color: C.cellInk,
+                borderTop: "var(--cat-rule)",
                 overflowWrap: "anywhere",
               }}
             >
@@ -442,11 +443,11 @@ function BoardControl({ state, send }: { state: RoomState; send: Send }) {
                   className={`display num shape ${spent ? "" : "tile"}`}
                   style={{
                     height: "clamp(48px,8vh,72px)",
-                    fontSize: "clamp(16px,1.8vw,24px)",
+                    fontSize: "clamp(18px,2vw,28px)",
                     color: spent ? "transparent" : C.accent,
-                    background: spent ? C.panelDeep : `linear-gradient(180deg,${C.surface},${C.tile})`,
-                    border: `1px solid ${spent ? C.lineFaint : C.edgeSoft}`,
-                    opacity: spent ? 0.6 : 1,
+                    background: spent ? "var(--cell-spent)" : CELL,
+                    border: "1px solid var(--cell-line)",
+                    opacity: spent ? 0.7 : 1,
                   }}
                   aria-label={spent ? "Played" : `${cat.name} for ${value}`}
                 >

@@ -74,7 +74,7 @@ textarea {
 
 .display {
   font-family: var(--font-display);
-  font-weight: 700;
+  font-weight: var(--display-weight, 700);
   text-transform: var(--caps);
   letter-spacing: var(--caps-track);
   line-height: 1.05;
@@ -85,6 +85,25 @@ textarea {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--c-muted);
+}
+/* Big-screen text: a hard broadcast drop shadow on themes that use one. */
+.broadcast {
+  text-shadow: var(--broadcast);
+}
+/* Clues and other long text read off the TV. */
+.clue-text {
+  font-family: var(--font-text);
+  font-weight: var(--text-weight, 700);
+  text-transform: var(--clue-case);
+  text-shadow: var(--broadcast);
+  line-height: 1.22;
+  text-wrap: balance;
+}
+/* Contestant names: handwriting on themes that want the podium look. */
+.name-text {
+  font-family: var(--font-name);
+  font-weight: 700;
+  line-height: 1.05;
 }
 .mono {
   font-family: var(--font-mono);
@@ -120,7 +139,7 @@ textarea {
   flex: none;
   border-radius: var(--r-btn);
   border: 1px solid var(--c-line);
-  background: var(--c-surface);
+  background-color: var(--c-surface);
   color: var(--c-text);
   font-size: 14px;
   font-weight: 600;
@@ -135,7 +154,7 @@ textarea {
     box-shadow 0.16s var(--snap);
 }
 .btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--c-surface), var(--c-text) 7%);
+  background-color: color-mix(in srgb, var(--c-surface), var(--c-text) 7%);
   color: var(--c-text);
 }
 .btn:active:not(:disabled) {
@@ -153,60 +172,59 @@ textarea {
   color: var(--c-on-accent);
 }
 .btn-primary {
-  background: var(--c-accent);
+  background-color: var(--c-accent);
 }
 .btn-good {
-  background: var(--c-good);
+  background-color: var(--c-good);
 }
 .btn-bad {
-  background: var(--c-warn);
+  background-color: var(--c-warn);
 }
 .btn-special {
-  background: var(--c-special);
+  background-color: var(--c-special);
 }
 .btn-info {
-  background: var(--c-info);
+  background-color: var(--c-info);
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--c-accent);
+  background-color: var(--c-accent);
   color: var(--c-on-accent);
   filter: brightness(1.08);
-  box-shadow: 0 6px 22px color-mix(in srgb, var(--c-accent) 30%, transparent);
 }
 .btn-good:hover:not(:disabled) {
-  background: var(--c-good);
+  background-color: var(--c-good);
   color: var(--c-on-accent);
   filter: brightness(1.08);
 }
 .btn-bad:hover:not(:disabled) {
-  background: var(--c-warn);
+  background-color: var(--c-warn);
   color: var(--c-on-accent);
   filter: brightness(1.08);
 }
 .btn-special:hover:not(:disabled) {
-  background: var(--c-special);
+  background-color: var(--c-special);
   color: var(--c-on-accent);
   filter: brightness(1.08);
 }
 .btn-info:hover:not(:disabled) {
-  background: var(--c-info);
+  background-color: var(--c-info);
   color: var(--c-on-accent);
   filter: brightness(1.08);
 }
 .btn-ghost {
-  background: transparent;
+  background-color: transparent;
   border-color: transparent;
   color: var(--c-dim);
 }
 .btn-ghost:hover:not(:disabled) {
-  background: var(--c-surface);
+  background-color: var(--c-surface);
 }
 .btn-danger {
   color: var(--c-warn);
 }
 .btn-danger.armed,
 .btn-danger.armed:hover:not(:disabled) {
-  background: var(--c-warn);
+  background-color: var(--c-warn);
   border-color: transparent;
   color: var(--c-on-accent);
 }
@@ -324,9 +342,8 @@ textarea.input {
   color: var(--c-text);
 }
 .seg > button[aria-pressed="true"] {
-  background: var(--c-surface);
+  background-color: var(--c-surface);
   color: var(--c-text);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
 /* On/off switch. */
@@ -746,10 +763,10 @@ textarea.input {
   transform: scale(0.97);
 }
 .lift:hover {
-  transform: translateY(-2px);
+  border-color: var(--c-edge-soft);
 }
 .lift:active {
-  transform: translateY(0) scale(0.98);
+  transform: scale(0.98);
 }
 
 /* A live board tile: reacts before it is even pressed. */
@@ -760,12 +777,10 @@ textarea.input {
     box-shadow 0.16s var(--snap);
 }
 .tile:hover {
-  transform: translateY(-3px) scale(1.015);
   filter: brightness(1.18);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
 }
 .tile:active {
-  transform: translateY(0) scale(0.985);
+  transform: scale(0.985);
 }
 
 @media (prefers-reduced-motion: reduce) {

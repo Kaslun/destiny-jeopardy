@@ -55,6 +55,11 @@ export const C = {
   warn: token("warn"),
   special: token("special"),
   good: token("good"),
+
+  /** Board screens, the text on them, and the bezel between them. */
+  cell: token("cell"),
+  cellInk: token("cellInk"),
+  gap: token("gap"),
 } as const;
 
 /** Full-bleed page backgrounds. */
@@ -71,6 +76,9 @@ export const SCENE: Record<SceneToken, string> = {
 export const mono = "var(--font-mono)";
 export const display = "var(--font-display)";
 export const body = "var(--font-body)";
+
+/** A board screen: the theme's cell colour, flat. */
+export const CELL = "var(--c-cell)";
 
 /** Corner radii, set by the theme's corner style. */
 export const R = {

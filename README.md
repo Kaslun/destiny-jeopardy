@@ -1,6 +1,14 @@
-# Jeopardy
+# Jeoparty
 
-A buzzer trivia game for a room full of people and their phones.
+A buzzer trivia game for a room full of people and their phones, styled after
+a late-90s TV quiz show.
+
+> **Name and look.** Jeoparty is an homage, not a copy. It uses no show logo,
+> artwork, fonts or audio: the board is built from our own colours and free
+> Google Fonts look-alikes (Anton, Merriweather, Caveat). Internal identifiers
+> such as the `JeopardyRoom` Durable Object and the `jeopardy/` storage prefix
+> keep their old names on purpose — renaming them would orphan deployed rooms
+> and every browser's saved quizzes and keys.
 
 Three live surfaces plus a board editor:
 
@@ -86,18 +94,32 @@ one wired to the game.
 
 ## Themes
 
-A theme is a palette, a display typeface, a corner style and the words the game
-uses about itself. Six presets ship in `lib/themes.ts`: **Classic** (the
-default), **Guardian** (the original design), **Midnight**, **Neon**, **Sunset**
-and **Daylight** (a light theme).
+A theme is a palette, a set of typefaces, a corner style and the words the game
+uses about itself. Every preset is flat: no gloss, bevels or raised shadows. Seven presets ship in `lib/themes.ts`:
+
+| Preset | Looks like |
+| --- | --- |
+| **Jeoparty** (default) | A late-90s quiz-show set: royal-blue monitor screens behind black bezels, gold values with hard drop shadows, clues in a white uppercase serif, handwritten podium names, on a flat violet stage. |
+| **Classic** | Dark navy and gold — the previous default. |
+| **Guardian** | The original design: deep navy, gold, sci-fi fireteam flavour. |
+| **Midnight**, **Neon**, **Sunset** | Dark, flat, modern. |
+| **Daylight** | A light theme. |
+
+The board is where most of the late-90s feel lives, and it works with any
+preset: `cell` (the screens), `cellInk` (text on them) and `gap` (the bezel). A
+theme with a bezel colour renders the TV board as a wall of monitors: no accent
+rule over categories, and a played clue leaves its screen blank. A `hard`
+shadow sets the TV's big text with a broadcast drop shadow (the TV only — the
+screens people interact with stay flat), and `clueCaps` sets clues in
+capitals.
 
 ### Making a quiz your own
 
 Every quiz has a **Style** button in the editor's header. It opens a panel with
 a live preview where the author picks a preset, then optionally an accent
-colour, a background colour, a typeface, a corner style (sharp, cut, soft,
-round), capital headings on or off, and a logo (an emoji or up to three
-letters). The editor wears the result as you go, so what you see is what the
+colour, a board-screen colour, a background colour, a typeface, a corner style
+(sharp, cut, soft, round), capital headings on or off, and an optional logo (an
+emoji or up to three letters; there is none by default). The editor wears the result as you go, so what you see is what the
 room sees.
 
 Those choices are stored on the board as `game.style` — a small object of

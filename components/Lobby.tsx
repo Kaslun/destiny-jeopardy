@@ -2,7 +2,7 @@
 
 import { JoinPanel } from "./JoinPanel";
 import { Mark } from "./ui";
-import { C, tintFor } from "../lib/theme";
+import { C, CELL, tintFor } from "../lib/theme";
 import type { RoomState } from "../shared/protocol";
 import type { Theme } from "../lib/themes";
 
@@ -28,7 +28,7 @@ export function Lobby({ state, room, theme }: { state: RoomState; room: string; 
     >
       <header style={{ display: "flex", alignItems: "center", gap: 18, flex: "none" }}>
         <Mark mark={theme.mark} size={56} />
-        <div className="display" style={{ fontSize: "clamp(26px,2.8vw,48px)" }}>
+        <div className="display broadcast" style={{ fontSize: "clamp(26px,2.8vw,48px)" }}>
           {title}
         </div>
       </header>
@@ -65,14 +65,17 @@ export function Lobby({ state, room, theme }: { state: RoomState; room: string; 
                   gap: 12,
                   padding: "clamp(10px,1vw,16px) clamp(16px,1.4vw,24px)",
                   borderRadius: "var(--r-btn)",
-                  background: C.panel,
-                  border: `1px solid ${C.line}`,
+                  background: CELL,
+                  color: C.cellInk,
+                  border: "1px solid var(--cell-line)",
                   opacity: p.connected ? 1 : 0.45,
                   animationDelay: `${Math.min(i, 8) * 40}ms`,
                 }}
               >
                 <span style={{ width: 14, height: 14, borderRadius: "50%", background: tintFor(p.tint ?? i) }} />
-                <span style={{ fontSize: "clamp(18px,1.7vw,30px)", fontWeight: 700 }}>{p.name}</span>
+                <span className="name-text" style={{ fontSize: "calc(clamp(18px,1.7vw,30px) * var(--name-scale))" }}>
+                  {p.name}
+                </span>
               </div>
             ))}
           </div>

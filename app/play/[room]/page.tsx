@@ -338,13 +338,7 @@ export default function PhoneBuzzer() {
   }
 
   const ring = isFirst ? C.good : reading ? C.info : canBuzz ? C.accent : C.line;
-  const face = isFirst
-    ? `radial-gradient(circle at 50% 30%, color-mix(in srgb, ${C.good}, white 30%), ${C.good})`
-    : canBuzz
-      ? `radial-gradient(circle at 50% 30%, ${C.accentSoft}, ${C.accent} 70%)`
-      : reading
-        ? `radial-gradient(circle at 50% 30%, ${alpha(C.info, 22)}, ${C.panel})`
-        : `radial-gradient(circle at 50% 30%, ${C.surface}, ${C.panelDeep})`;
+  const face = isFirst ? C.good : canBuzz ? C.accent : reading ? alpha(C.info, 14) : C.surfaceDeep;
 
   return (
     <Frame scene={isFirst ? "winner" : "landing"}>
@@ -372,7 +366,11 @@ export default function PhoneBuzzer() {
           </span>
         </button>
         <div style={{ flex: 1 }} />
-        <Score value={me?.score ?? 0} positiveColor={C.accent} style={{ fontSize: 28, fontWeight: 800, fontFamily: "var(--font-display)" }} />
+        <Score
+          value={me?.score ?? 0}
+          positiveColor={C.accent}
+          style={{ fontSize: 30, fontWeight: "var(--display-weight)", fontFamily: "var(--font-display)" }}
+        />
       </header>
 
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 28, width: "100%" }}>
@@ -403,7 +401,7 @@ export default function PhoneBuzzer() {
             border: `4px solid ${ring}`,
             background: face,
             color: isFirst || canBuzz ? C.onAccent : C.text,
-            boxShadow: canBuzz ? `0 18px 60px ${alpha(C.accent, 35)}` : isFirst ? `0 18px 60px ${alpha(C.good, 40)}` : "none",
+
             animation: canBuzz ? "pulseGlow 2.4s infinite" : undefined,
             opacity: 1,
             cursor: canBuzz ? "pointer" : "default",
